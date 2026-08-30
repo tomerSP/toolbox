@@ -1,0 +1,12 @@
+# Agent files — local guidance, not part of the site
+CLAUDE.md
+AGENTS.md
+.claude/
+
+# Obsidian vault content staged for the site
+web-vault/
+
+# Editor / OS noise
+node_modules/
+.DS_Store
+Thumbs.db

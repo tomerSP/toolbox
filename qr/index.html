@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>File &amp; text to QR code — free, offline, no upload</title>
+<meta name="description" content="Turn a link, text, Wi-Fi login or a small file into a QR code and download it as PNG or SVG. Runs entirely in your browser — nothing is uploaded.">
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+  .tabs button[aria-selected="true"] {
+    background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
+  }
+
+  .cols { display: grid; grid-template-columns: 1fr 300px; gap: 20px; align-items: start; }
+  @media (max-width: 720px) { .cols { grid-template-columns: 1fr; } }
+
+  .field { margin-bottom: 14px; }
+  .row { display: flex; gap: 12px; }
+  .row .field { flex: 1; }
+
+  .meter { font: 12px var(--mono); color: var(--muted); margin-top: 6px; }
+  .meter.over { color: var(--warn); font-weight: 600; }
+
+  .drop {
+    border: 1.5px dashed var(--line); border-radius: var(--radius);
+    padding: 28px 16px; text-align: center; color: var(--muted); cursor: pointer;
+  }
+  .drop.hot { border-color: var(--accent); color: var(--ink); }
+  .drop strong { color: var(--ink); display: block; margin-bottom: 4px; }
+
+  #out { background: #fff; border-radius: var(--radius); padding: 12px; display: grid; place-items: center; min-height: 240px; }
+  #out svg { width: 100%; height: auto; display: block; }
+  .empty { color: #999; font-size: 14px; text-align: center; }
+
+  .actions { display: flex; gap: 8px; margin-top: 12px; }
+  .actions button { flex: 1; }
+
+  .note { font-size: 13px; color: var(--muted); margin-top: 24px; }
+  details { margin-top: 28px; font-size: 14px; color: var(--muted); }
+  summary { cursor: pointer; color: var(--ink); }
+  details p { max-width: 62ch; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="crumb"><a href="../">← Tomer's Toolbox</a></div>
+
+  <header class="site">
+    <h1>File &amp; text → QR code</h1>
+  </header>
+  <p class="lede">
+    Paste a link, type some text, share a Wi-Fi login, or drop in a small file.
+    Nothing leaves your browser.
+  </p>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" id="tab-text" aria-selected="true">Text / URL</button>
+    <button role="tab" id="tab-wifi" aria-selected="false">Wi-Fi</button>
+    <button role="tab" id="tab-file" aria-selected="false">File</button>
+  </div>
+
+  <div class="cols">
+    <div>
+      <section id="pane-text" class="panel">
+        <div class="field">
+          <label for="text">Text or URL</label>
+          <textarea id="text" placeholder="https://example.com"></textarea>
+        </div>
+      </section>
+
+      <section id="pane-wifi" class="panel" hidden>
+        <div class="row">
+          <div class="field">
+            <label for="ssid">Network name (SSID)</label>
+            <input type="text" id="ssid" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="enc">Security</label>
+            <select id="enc">
+              <option value="WPA">WPA / WPA2 / WPA3</option>
+              <option value="WEP">WEP</option>
+              <option value="nopass">Open (no password)</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="pass">Password</label>
+          <input type="text" id="pass" autocomplete="off">
+        </div>
+        <div class="field">
+          <label><input type="checkbox" id="hidden-net" style="width:auto;margin-right:6px">Hidden network</label>
+        </div>
+      </section>
+
+      <section id="pane-file" class="panel" hidden>
+        <div class="drop" id="drop">
+          <strong>Drop a file here, or click to choose</strong>
+          QR codes are tiny — keep it under ~2&nbsp;KB
+        </div>
+        <input type="file" id="file" hidden>
+        <div id="file-name" class="meter"></div>
+      </section>
+
+      <div class="row" style="margin-top:16px">
+        <div class="field">
+          <label for="ec">Error correction</label>
+          <select id="ec">
+            <option value="L">L — most data</option>
+            <option value="M" selected>M — balanced</option>
+            <option value="Q">Q — tolerant</option>
+            <option value="H">H — most tolerant</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="margin">Quiet margin</label>
+          <select id="margin">
+            <option value="4" selected>4 modules (standard)</option>
+            <option value="2">2 modules</option>
+            <option value="0">None</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="meter" class="meter"></div>
+    </div>
+
+    <div>
+      <div id="out"><div class="empty">Your QR code appears here</div></div>
+      <div class="actions">
+        <button id="dl-png" class="primary" disabled>PNG</button>
+        <button id="dl-svg" disabled>SVG</button>
+      </div>
+      <p class="note">PNG is exported at 1024&nbsp;px. SVG scales to any size — use it for print.</p>
+    </div>
+  </div>
+
+  <details>
+    <summary>Why can't I put a big file in a QR code?</summary>
+    <p>
+      A QR code is not storage — it is a printed string of at most 2,953 bytes,
+      and that is the absolute ceiling at the lowest error-correction level.
+      Files are encoded here as a <code>data:</code> URI, which costs about a
+      third extra on top of the raw size, so the practical limit is roughly
+      2&nbsp;KB. Anything larger has to be uploaded somewhere and linked to by URL.
+    </p>
+  </details>
+
+  <footer class="site">
+    Runs entirely in your browser — no file is ever uploaded.
+    QR encoding by <a href="https://github.com/kazuhikoarase/qrcode-generator">qrcode-generator</a> (MIT).
+  </footer>
+
+</div>
+
+<script src="./vendor/qrcode.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  // Byte-mode capacity at QR version 40, per error-correction level.
+  var CAPACITY = { L: 2953, M: 2331, Q: 1663, H: 1273 };
+
+  var mode = 'text';
+  var fileDataUri = '';
+  var current = null; // { qr, count, margin }
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  var panes = { text: $('pane-text'), wifi: $('pane-wifi'), file: $('pane-file') };
+  var tabs = { text: $('tab-text'), wifi: $('tab-wifi'), file: $('tab-file') };
+
+  Object.keys(tabs).forEach(function (key) {
+    tabs[key].addEventListener('click', function () {
+      mode = key;
+      Object.keys(tabs).forEach(function (k) {
+        tabs[k].setAttribute('aria-selected', String(k === key));
+        panes[k].hidden = k !== key;
+      });
+      render();
+    });
+  });
+
+  // Wi-Fi payloads escape \ ; , : and " with a backslash.
+  function wifiEscape(s) {
+    return s.replace(/([\\;,:"])/g, '\\$1');
+  }
+
+  function payload() {
+    if (mode === 'text') return $('text').value;
+    if (mode === 'file') return fileDataUri;
+
+    var ssid = $('ssid').value;
+    if (!ssid) return '';
+    var enc = $('enc').value;
+    var out = 'WIFI:T:' + enc + ';S:' + wifiEscape(ssid) + ';';
+    if (enc !== 'nopass') out += 'P:' + wifiEscape($('pass').value) + ';';
+    if ($('hidden-net').checked) out += 'H:true;';
+    return out + ';';
+  }
+
+  function byteLength(s) {
+    return new TextEncoder().encode(s).length;
+  }
+
+  function svgFor(qr, margin, px) {
+    var n = qr.getModuleCount();
+    var size = n + margin * 2;
+    var parts = [];
+    for (var r = 0; r < n; r++) {
+      for (var c = 0; c < n; c++) {
+        if (qr.isDark(r, c)) parts.push('M' + (c + margin) + ' ' + (r + margin) + 'h1v1h-1z');
+      }
+    }
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + size + ' ' + size + '"' +
+      (px ? ' width="' + px + '" height="' + px + '"' : '') +
+      ' shape-rendering="crispEdges">' +
+      '<rect width="' + size + '" height="' + size + '" fill="#ffffff"/>' +
+      '<path fill="#000000" d="' + parts.join('') + '"/></svg>';
+  }
+
+  function render() {
+    var data = payload();
+    var ec = $('ec').value;
+    var margin = parseInt($('margin').value, 10);
+    var count = byteLength(data);
+    var cap = CAPACITY[ec];
+    var meter = $('meter');
+    var out = $('out');
+
+    current = null;
+    $('dl-png').disabled = true;
+    $('dl-svg').disabled = true;
+
+    if (!data) {
+      meter.className = 'meter';
+      meter.textContent = '';
+      out.innerHTML = '<div class="empty">Your QR code appears here</div>';
+      return;
+    }
+
+    meter.className = 'meter' + (count > cap ? ' over' : '');
+    meter.textContent = count.toLocaleString() + ' / ' + cap.toLocaleString() +
+      ' bytes at level ' + ec +
+      (count > cap ? ' — too much data. Lower the error correction, or shorten the input.' : '');
+
+    if (count > cap) {
+      out.innerHTML = '<div class="empty">Too much data to encode</div>';
+      return;
+    }
+
+    try {
+      var qr = qrcode(0, ec);           // 0 = pick the smallest version that fits
+      qr.addData(data, 'Byte');
+      qr.make();
+      out.innerHTML = svgFor(qr, margin, 0);
+      current = { qr: qr, margin: margin };
+      $('dl-png').disabled = false;
+      $('dl-svg').disabled = false;
+    } catch (err) {
+      meter.className = 'meter over';
+      meter.textContent = 'Could not encode this input: ' + err.message;
+      out.innerHTML = '<div class="empty">Could not encode</div>';
+    }
+  }
+
+  function download(blob, name) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  $('dl-svg').addEventListener('click', function () {
+    if (!current) return;
+    download(new Blob([svgFor(current.qr, current.margin, 0)], { type: 'image/svg+xml' }), 'qr.svg');
+  });
+
+  $('dl-png').addEventListener('click', function () {
+    if (!current) return;
+    var qr = current.qr, margin = current.margin;
+    var n = qr.getModuleCount(), size = n + margin * 2;
+    var target = 1024;
+    var scale = Math.max(1, Math.round(target / size)); // whole pixels per module: no blur
+    var canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size * scale;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#000000';
+    for (var r = 0; r < n; r++) {
+      for (var c = 0; c < n; c++) {
+        if (qr.isDark(r, c)) ctx.fillRect((c + margin) * scale, (r + margin) * scale, scale, scale);
+      }
+    }
+    canvas.toBlob(function (blob) { download(blob, 'qr.png'); }, 'image/png');
+  });
+
+  // --- file input -------------------------------------------------------
+  var drop = $('drop');
+  var fileInput = $('file');
+
+  function takeFile(file) {
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      fileDataUri = reader.result;
+      $('file-name').textContent = file.name + ' — ' + file.size.toLocaleString() + ' bytes raw';
+      render();
+    };
+    reader.readAsDataURL(file);
+  }
+
+  drop.addEventListener('click', function () { fileInput.click(); });
+  fileInput.addEventListener('change', function () { takeFile(fileInput.files[0]); });
+
+  ['dragenter', 'dragover'].forEach(function (ev) {
+    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('hot'); });
+  });
+  ['dragleave', 'drop'].forEach(function (ev) {
+    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('hot'); });
+  });
+  drop.addEventListener('drop', function (e) {
+    if (e.dataTransfer.files.length) takeFile(e.dataTransfer.files[0]);
+  });
+
+  // --- wire up live rendering -------------------------------------------
+  ['text', 'ssid', 'pass', 'enc', 'hidden-net', 'ec', 'margin'].forEach(function (id) {
+    $(id).addEventListener('input', render);
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

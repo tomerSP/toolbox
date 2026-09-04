@@ -114,6 +114,7 @@
           <label for="file-encoding">File encoding</label>
           <select id="file-encoding">
             <option value="data-uri">Data URI — ordinary scanners</option>
+            <option value="packed">Packed — preserve filename and type</option>
             <option value="raw">Raw bytes — maximum capacity</option>
           </select>
         </div>
@@ -192,8 +193,9 @@
       Compatible mode uses a <code>data:</code> URI, which costs about a third
       extra on top of the raw size, so the practical limit is roughly 2&nbsp;KB.
       Raw-byte mode uses the full capacity, but ordinary scanners may not know
-      the file type or how to save it. Larger files must be uploaded somewhere
-      and linked to by URL.
+      the file type or how to save it. Packed mode spends a few bytes preserving
+      the filename and type, but only this site promises to restore it. Larger
+      files must be uploaded somewhere and linked to by URL.
     </p>
   </details>
 
@@ -208,6 +210,7 @@
 
 <script src="./vendor/qrcode.js"></script>
 <script src="./vendor/jsQR.js"></script>
+<script src="./tqr1.js"></script>
 <script>
 (function () {
   'use strict';
@@ -225,9 +228,13 @@
   var mode = 'text';
   var fileDataUri = '';
   var fileBytes = null;
+  var fileName = '';
+  var fileMimeType = '';
   var fileLoadId = 0;
   var scanLoadId = 0;
   var scanResultBytes = null;
+  var scanDownloadName = 'qr-data.bin';
+  var scanDownloadType = 'application/octet-stream';
   var current = null; // { qr, count, margin }
   var canCopyImage = navigator.clipboard && navigator.clipboard.write &&
     typeof ClipboardItem !== 'undefined';
@@ -298,13 +305,20 @@
   }
 
   function updateFileEncodingNote() {
-    var raw = $('file-encoding').value === 'raw';
-    $('file-encoding-note').innerHTML = raw
-      ? 'Fits up to 2,953 bytes at level L. The filename is not included. <span class="file-warning">Most scanners cannot identify the file type or save arbitrary bytes correctly.</span>'
-      : 'Most compatible. Includes the file type in a data: URI, but base64 reduces practical file capacity to about 2 KB.';
-    $('file-limit').textContent = raw
-      ? 'QR codes are tiny — keep it under ~2.9 KB'
-      : 'QR codes are tiny — keep it under ~2 KB';
+    var encoding = $('file-encoding').value;
+    if (encoding === 'packed') {
+      $('file-encoding-note').innerHTML =
+        'Preserves the filename and file type without base64 overhead. <span class="file-warning">Only this site promises to restore Packed files.</span>';
+      $('file-limit').textContent = 'QR codes are tiny — file plus metadata must stay under ~2.9 KB';
+    } else if (encoding === 'raw') {
+      $('file-encoding-note').innerHTML =
+        'Fits up to 2,953 bytes at level L. The filename is not included. <span class="file-warning">Most scanners cannot identify the file type or save arbitrary bytes correctly.</span>';
+      $('file-limit').textContent = 'QR codes are tiny — keep it under ~2.9 KB';
+    } else {
+      $('file-encoding-note').textContent =
+        'Most compatible. Includes the file type in a data: URI, but base64 reduces practical file capacity to about 2 KB.';
+      $('file-limit').textContent = 'QR codes are tiny — keep it under ~2 KB';
+    }
   }
 
   function svgFor(qr, margin, px) {
@@ -324,11 +338,15 @@
   }
 
   function render() {
-    var rawFile = mode === 'file' && $('file-encoding').value === 'raw';
-    var data = rawFile ? fileBytes : payload();
+    var fileEncoding = mode === 'file' ? $('file-encoding').value : '';
+    var binaryFile = fileEncoding === 'raw' || fileEncoding === 'packed';
+    var data = binaryFile ? fileBytes : payload();
+    if (fileEncoding === 'packed' && data) {
+      data = TQR1.encode({ payload: data, filename: fileName, mimeType: fileMimeType });
+    }
     var ec = $('ec').value;
     var margin = parseInt($('margin').value, 10);
-    var encoding = rawFile
+    var encoding = binaryFile
       ? { mode: 'Byte', count: data ? data.length : 0, unit: 'bytes' }
       : encodingFor(data);
     var count = encoding.count;
@@ -341,7 +359,7 @@
     $('dl-svg').disabled = true;
     $('copy-qr').disabled = true;
 
-    if (!data || (rawFile && !data.length)) {
+    if (!data || (fileEncoding === 'raw' && !data.length)) {
       meter.className = 'meter';
       meter.textContent = '';
       out.innerHTML = '<div class="empty">Your QR code appears here</div>';
@@ -354,7 +372,7 @@
 
     try {
       var qr = qrcode(0, ec);           // 0 = pick the smallest version that fits
-      if (rawFile) addByteData(qr, data);
+      if (binaryFile) addByteData(qr, data);
       else qr.addData(data, encoding.mode);
       qr.make();
       out.innerHTML = svgFor(qr, margin, 0);
@@ -414,6 +432,8 @@
 
   function clearScanResult(message, isError) {
     scanResultBytes = null;
+    scanDownloadName = 'qr-data.bin';
+    scanDownloadType = 'application/octet-stream';
     $('scan-canvas').hidden = true;
     $('scan-placeholder').hidden = false;
     $('scan-placeholder').textContent = message || 'Decoded result appears here';
@@ -423,6 +443,12 @@
     $('scan-text').value = '';
     $('copy-scan').disabled = true;
     $('dl-scan').disabled = true;
+    $('dl-scan').textContent = 'Download bytes';
+  }
+
+  function safeFilename(filename) {
+    var safe = filename.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/^\.+$/, '');
+    return safe || 'qr-file.bin';
   }
 
   function decodedText(code, bytes) {
@@ -491,12 +517,37 @@
         }
 
         scanResultBytes = new Uint8Array(code.binaryData);
+        var packed = null;
+        if (TQR1.isContainer(scanResultBytes)) {
+          try {
+            packed = TQR1.decode(scanResultBytes);
+          } catch (err) {
+            clearScanResult('This Packed QR code is damaged or unsupported.', true);
+            canvas.hidden = false;
+            $('scan-placeholder').hidden = true;
+            return;
+          }
+          if (packed.algorithm !== 'stored') {
+            clearScanResult('This Packed QR code uses compression that is not supported yet.', true);
+            canvas.hidden = false;
+            $('scan-placeholder').hidden = true;
+            return;
+          }
+          scanResultBytes = new Uint8Array(packed.payload);
+          scanDownloadName = safeFilename(packed.filename);
+          scanDownloadType = packed.mimeType || 'application/octet-stream';
+        }
         var text = decodedText(code, scanResultBytes);
         $('scan-status').className = 'meter';
-        $('scan-status').textContent = text === null
-          ? scanResultBytes.length.toLocaleString() + ' binary bytes decoded.'
-          : scanResultBytes.length.toLocaleString() + ' bytes decoded as text.';
+        $('scan-status').textContent = packed
+          ? 'Packed file decoded: ' + scanDownloadName + ' — ' +
+            scanResultBytes.length.toLocaleString() + ' bytes' +
+            (packed.mimeType ? ' — ' + packed.mimeType : '') + '.'
+          : (text === null
+            ? scanResultBytes.length.toLocaleString() + ' binary bytes decoded.'
+            : scanResultBytes.length.toLocaleString() + ' bytes decoded as text.');
         $('dl-scan').disabled = false;
+        $('dl-scan').textContent = packed ? 'Download file' : 'Download bytes';
         if (text !== null) {
           $('scan-text').value = text;
           $('scan-text-field').hidden = false;
@@ -580,7 +631,7 @@
 
   $('dl-scan').addEventListener('click', function () {
     if (!scanResultBytes) return;
-    download(new Blob([scanResultBytes], { type: 'application/octet-stream' }), 'qr-data.bin');
+    download(new Blob([scanResultBytes], { type: scanDownloadType }), scanDownloadName);
   });
 
   $('dl-png').addEventListener('click', function () {
@@ -625,6 +676,8 @@
     var bytesReader = new FileReader();
     fileDataUri = '';
     fileBytes = null;
+    fileName = file.name || '';
+    fileMimeType = file.type || '';
     $('file-name').textContent = file.name + ' — ' + file.size.toLocaleString() + ' bytes raw';
     render();
     dataUriReader.onload = function () {

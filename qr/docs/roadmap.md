@@ -11,6 +11,7 @@ source of truth for current behavior.
 - Text uses Numeric, Alphanumeric, or Byte mode based on the full payload.
 - Non-ASCII text is encoded as UTF-8.
 - Files can use compatible base64 `data:` URIs or higher-capacity raw bytes.
+- Stored Packed files preserve filename and MIME metadata for this site's decoder.
 - Decodes QR codes from uploaded images as text or downloadable raw bytes.
 - Copies generated QR images and pastes QR images through the clipboard.
 
@@ -53,6 +54,11 @@ origLen   varint       original byte length
 payload                stored or compressed bytes
 ```
 
+Flags use bits 0–1 for the algorithm (`0` stored, `1` DEFLATE raw), bit 2 for
+the filename, and bit 3 for the MIME type. Bits 4–7 are reserved and must be
+zero. Lengths are unsigned LEB128 varints limited to 32 bits. Decoders reject
+unknown algorithms, reserved flags, invalid UTF-8 metadata, and truncated data.
+
 Use `deflate-raw` through the browser's `CompressionStream`. QR error
 correction already protects the encoded stream, so gzip or zlib wrapper bytes
 are unnecessary.
@@ -67,6 +73,8 @@ are unnecessary.
 
 ### F2 — Packed round trip
 
+- [x] Implement and test the versioned `TQR1` container codec.
+- [x] Add stored Packed file encoding and restore its metadata when decoding.
 - Add `TQR1` encoding with `deflate-raw` and stored fallback.
 - [x] Vendor a QR reader with its license.
 - [x] Decode uploaded images in-browser as text or raw bytes.

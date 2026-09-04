@@ -12,6 +12,7 @@ source of truth for current behavior.
 - Non-ASCII text is encoded as UTF-8.
 - Files can use compatible base64 `data:` URIs or higher-capacity raw bytes.
 - Decodes QR codes from uploaded images as text or downloadable raw bytes.
+- Copies generated QR images and pastes QR images through the clipboard.
 
 ## Product boundary
 
@@ -69,6 +70,7 @@ are unnecessary.
 - Add `TQR1` encoding with `deflate-raw` and stored fallback.
 - [x] Vendor a QR reader with its license.
 - [x] Decode uploaded images in-browser as text or raw bytes.
+- [x] Add clipboard copy and paste for QR images.
 - Restore file metadata from Packed codes.
 - Consider camera input only after image upload is reliable.
 

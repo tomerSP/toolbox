@@ -122,12 +122,15 @@
 
       <section id="pane-scan" class="panel" hidden>
         <div class="drop" id="scan-drop">
-          <strong>Drop a QR image here, or click to choose</strong>
+          <strong>Drop, paste, or choose a QR image</strong>
           PNG, JPEG, GIF, WebP, or another browser-supported image
         </div>
         <input type="file" id="scan-file" accept="image/*" hidden>
+        <div class="actions">
+          <button id="paste-scan" type="button">Paste image</button>
+        </div>
         <div id="scan-file-name" class="meter"></div>
-        <p class="note">Decoded locally. Images are never uploaded.</p>
+        <p class="note">You can also press Ctrl+V or ⌘V. Decoded locally; images are never uploaded.</p>
       </section>
 
       <div id="generator-settings">
@@ -159,6 +162,7 @@
       <div class="actions">
         <button id="dl-png" class="primary" disabled>PNG</button>
         <button id="dl-svg" disabled>SVG</button>
+        <button id="copy-qr" disabled>Copy image</button>
       </div>
       <p class="note">PNG is exported at 1024&nbsp;px. SVG scales to any size — use it for print.</p>
     </div>
@@ -225,8 +229,14 @@
   var scanLoadId = 0;
   var scanResultBytes = null;
   var current = null; // { qr, count, margin }
+  var canCopyImage = navigator.clipboard && navigator.clipboard.write &&
+    typeof ClipboardItem !== 'undefined';
 
   var $ = function (id) { return document.getElementById(id); };
+
+  if (!canCopyImage) {
+    $('copy-qr').title = 'Image clipboard copying is not supported in this browser.';
+  }
 
   var panes = { text: $('pane-text'), wifi: $('pane-wifi'), file: $('pane-file'), scan: $('pane-scan') };
   var tabs = { text: $('tab-text'), wifi: $('tab-wifi'), file: $('tab-file'), scan: $('tab-scan') };
@@ -329,6 +339,7 @@
     current = null;
     $('dl-png').disabled = true;
     $('dl-svg').disabled = true;
+    $('copy-qr').disabled = true;
 
     if (!data || (rawFile && !data.length)) {
       meter.className = 'meter';
@@ -350,6 +361,7 @@
       current = { qr: qr, margin: margin };
       $('dl-png').disabled = false;
       $('dl-svg').disabled = false;
+      $('copy-qr').disabled = !canCopyImage;
     } catch (err) {
       meter.className = 'meter over';
       meter.textContent += ' — too much data. Lower the error correction, or shorten the input.';
@@ -366,6 +378,29 @@
     a.click();
     a.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  function qrPngBlob(callback) {
+    if (!current) {
+      callback(null);
+      return;
+    }
+    var qr = current.qr, margin = current.margin;
+    var n = qr.getModuleCount(), size = n + margin * 2;
+    var target = 1024;
+    var scale = Math.max(1, Math.round(target / size)); // whole pixels per module: no blur
+    var canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size * scale;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#000000';
+    for (var r = 0; r < n; r++) {
+      for (var c = 0; c < n; c++) {
+        if (qr.isDark(r, c)) ctx.fillRect((c + margin) * scale, (r + margin) * scale, scale, scale);
+      }
+    }
+    canvas.toBlob(callback, 'image/png');
   }
 
   $('dl-svg').addEventListener('click', function () {
@@ -403,13 +438,14 @@
     return /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text) ? null : text;
   }
 
-  function scanImage(file) {
+  function scanImage(file, displayName) {
     if (!file) return;
     var loadId = ++scanLoadId;
     var reader = new FileReader();
     clearScanResult('Reading image…', false);
     $('scan-status').textContent = 'Reading image…';
-    $('scan-file-name').textContent = file.name + ' — ' + file.size.toLocaleString() + ' bytes';
+    $('scan-file-name').textContent = (displayName || file.name || 'Clipboard image') +
+      ' — ' + file.size.toLocaleString() + ' bytes';
 
     reader.onerror = function () {
       if (loadId === scanLoadId) clearScanResult('Could not read this image.', true);
@@ -484,6 +520,51 @@
     if (e.dataTransfer.files.length) scanImage(e.dataTransfer.files[0]);
   });
 
+  function clipboardImage(items) {
+    for (var i = 0; i < items.length; i++) {
+      for (var j = 0; j < items[i].types.length; j++) {
+        if (items[i].types[j].indexOf('image/') === 0) {
+          return items[i].getType(items[i].types[j]);
+        }
+      }
+    }
+    return Promise.resolve(null);
+  }
+
+  $('paste-scan').addEventListener('click', function () {
+    if (!navigator.clipboard || !navigator.clipboard.read) {
+      clearScanResult('Clipboard image access is not supported here. Press Ctrl+V instead.', true);
+      return;
+    }
+    clearScanResult('Reading clipboard…', false);
+    $('scan-status').textContent = 'Reading clipboard…';
+    navigator.clipboard.read()
+      .then(clipboardImage)
+      .then(function (blob) {
+        if (!blob) {
+          clearScanResult('No image found on the clipboard.', true);
+          return;
+        }
+        scanImage(blob, 'Clipboard image');
+      })
+      .then(null, function () {
+        clearScanResult('Could not read the clipboard. Allow access or press Ctrl+V.', true);
+      });
+  });
+
+  document.addEventListener('paste', function (e) {
+    if (mode !== 'scan' || !e.clipboardData) return;
+    for (var i = 0; i < e.clipboardData.items.length; i++) {
+      var item = e.clipboardData.items[i];
+      if (item.type.indexOf('image/') === 0) {
+        e.preventDefault();
+        scanImage(item.getAsFile(), 'Clipboard image');
+        return;
+      }
+    }
+    clearScanResult('No image found on the clipboard.', true);
+  });
+
   $('copy-scan').addEventListener('click', function () {
     if ($('copy-scan').disabled) return;
     var text = $('scan-text').value;
@@ -503,23 +584,34 @@
   });
 
   $('dl-png').addEventListener('click', function () {
-    if (!current) return;
-    var qr = current.qr, margin = current.margin;
-    var n = qr.getModuleCount(), size = n + margin * 2;
-    var target = 1024;
-    var scale = Math.max(1, Math.round(target / size)); // whole pixels per module: no blur
-    var canvas = document.createElement('canvas');
-    canvas.width = canvas.height = size * scale;
-    var ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#000000';
-    for (var r = 0; r < n; r++) {
-      for (var c = 0; c < n; c++) {
-        if (qr.isDark(r, c)) ctx.fillRect((c + margin) * scale, (r + margin) * scale, scale, scale);
-      }
-    }
-    canvas.toBlob(function (blob) { download(blob, 'qr.png'); }, 'image/png');
+    qrPngBlob(function (blob) {
+      if (blob) download(blob, 'qr.png');
+    });
+  });
+
+  $('copy-qr').addEventListener('click', function () {
+    if (!current || !canCopyImage) return;
+    var button = $('copy-qr');
+    button.disabled = true;
+    var png = new Promise(function (resolve, reject) {
+      qrPngBlob(function (blob) {
+        if (blob) resolve(blob);
+        else reject(new Error('Could not create PNG'));
+      });
+    });
+    navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+      .then(function () {
+        button.textContent = 'Copied';
+      })
+      .then(null, function () {
+        button.textContent = 'Copy failed';
+      })
+      .then(function () {
+        setTimeout(function () {
+          button.textContent = 'Copy image';
+          button.disabled = !current || !canCopyImage;
+        }, 1200);
+      });
   });
 
   // --- file input -------------------------------------------------------

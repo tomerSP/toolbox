@@ -37,6 +37,11 @@
   .actions button { flex: 1; }
 
   .note { font-size: 13px; color: var(--muted); margin-top: 24px; }
+  #file-encoding-note { margin-top: 8px; }
+  .file-warning { color: #9a4a1e; font-weight: 600; }
+  @media (prefers-color-scheme: dark) {
+    .file-warning { color: #ffd54f; }
+  }
   details { margin-top: 28px; font-size: 14px; color: var(--muted); }
   summary { cursor: pointer; color: var(--ink); }
   details p { max-width: 62ch; }
@@ -97,10 +102,18 @@
       <section id="pane-file" class="panel" hidden>
         <div class="drop" id="drop">
           <strong>Drop a file here, or click to choose</strong>
-          QR codes are tiny — keep it under ~2&nbsp;KB
+          <span id="file-limit">QR codes are tiny — keep it under ~2&nbsp;KB</span>
         </div>
         <input type="file" id="file" hidden>
         <div id="file-name" class="meter"></div>
+        <div class="field" style="margin-top:14px">
+          <label for="file-encoding">File encoding</label>
+          <select id="file-encoding">
+            <option value="data-uri">Data URI — ordinary scanners</option>
+            <option value="raw">Raw bytes — maximum capacity</option>
+          </select>
+        </div>
+        <p id="file-encoding-note" class="note"></p>
       </section>
 
       <div class="row" style="margin-top:16px">
@@ -141,9 +154,11 @@
     <p>
       A QR code is not storage — it is a printed string of at most 2,953 bytes,
       and that is the absolute ceiling at the lowest error-correction level.
-      Files are encoded here as a <code>data:</code> URI, which costs about a
-      third extra on top of the raw size, so the practical limit is roughly
-      2&nbsp;KB. Anything larger has to be uploaded somewhere and linked to by URL.
+      Compatible mode uses a <code>data:</code> URI, which costs about a third
+      extra on top of the raw size, so the practical limit is roughly 2&nbsp;KB.
+      Raw-byte mode uses the full capacity, but ordinary scanners may not know
+      the file type or how to save it. Larger files must be uploaded somewhere
+      and linked to by URL.
     </p>
   </details>
 
@@ -171,6 +186,8 @@
 
   var mode = 'text';
   var fileDataUri = '';
+  var fileBytes = null;
+  var fileLoadId = 0;
   var current = null; // { qr, count, margin }
 
   var $ = function (id) { return document.getElementById(id); };
@@ -221,6 +238,26 @@
     return { mode: 'Byte', count: byteLength(data), unit: 'bytes' };
   }
 
+  function addByteData(qr, bytes) {
+    var stringToBytes = qrcode.stringToBytes;
+    qrcode.stringToBytes = function () { return bytes; };
+    try {
+      qr.addData('', 'Byte');
+    } finally {
+      qrcode.stringToBytes = stringToBytes;
+    }
+  }
+
+  function updateFileEncodingNote() {
+    var raw = $('file-encoding').value === 'raw';
+    $('file-encoding-note').innerHTML = raw
+      ? 'Fits up to 2,953 bytes at level L. The filename is not included. <span class="file-warning">Most scanners cannot identify the file type or save arbitrary bytes correctly.</span>'
+      : 'Most compatible. Includes the file type in a data: URI, but base64 reduces practical file capacity to about 2 KB.';
+    $('file-limit').textContent = raw
+      ? 'QR codes are tiny — keep it under ~2.9 KB'
+      : 'QR codes are tiny — keep it under ~2 KB';
+  }
+
   function svgFor(qr, margin, px) {
     var n = qr.getModuleCount();
     var size = n + margin * 2;
@@ -238,10 +275,13 @@
   }
 
   function render() {
-    var data = payload();
+    var rawFile = mode === 'file' && $('file-encoding').value === 'raw';
+    var data = rawFile ? fileBytes : payload();
     var ec = $('ec').value;
     var margin = parseInt($('margin').value, 10);
-    var encoding = encodingFor(data);
+    var encoding = rawFile
+      ? { mode: 'Byte', count: data ? data.length : 0, unit: 'bytes' }
+      : encodingFor(data);
     var count = encoding.count;
     var cap = CAPACITY[encoding.mode][ec];
     var meter = $('meter');
@@ -251,7 +291,7 @@
     $('dl-png').disabled = true;
     $('dl-svg').disabled = true;
 
-    if (!data) {
+    if (!data || (rawFile && !data.length)) {
       meter.className = 'meter';
       meter.textContent = '';
       out.innerHTML = '<div class="empty">Your QR code appears here</div>';
@@ -264,7 +304,8 @@
 
     try {
       var qr = qrcode(0, ec);           // 0 = pick the smallest version that fits
-      qr.addData(data, encoding.mode);
+      if (rawFile) addByteData(qr, data);
+      else qr.addData(data, encoding.mode);
       qr.make();
       out.innerHTML = svgFor(qr, margin, 0);
       current = { qr: qr, margin: margin };
@@ -319,13 +360,25 @@
 
   function takeFile(file) {
     if (!file) return;
-    var reader = new FileReader();
-    reader.onload = function () {
-      fileDataUri = reader.result;
-      $('file-name').textContent = file.name + ' — ' + file.size.toLocaleString() + ' bytes raw';
+    var loadId = ++fileLoadId;
+    var dataUriReader = new FileReader();
+    var bytesReader = new FileReader();
+    fileDataUri = '';
+    fileBytes = null;
+    $('file-name').textContent = file.name + ' — ' + file.size.toLocaleString() + ' bytes raw';
+    render();
+    dataUriReader.onload = function () {
+      if (loadId !== fileLoadId) return;
+      fileDataUri = dataUriReader.result;
       render();
     };
-    reader.readAsDataURL(file);
+    bytesReader.onload = function () {
+      if (loadId !== fileLoadId) return;
+      fileBytes = new Uint8Array(bytesReader.result);
+      render();
+    };
+    dataUriReader.readAsDataURL(file);
+    bytesReader.readAsArrayBuffer(file);
   }
 
   drop.addEventListener('click', function () { fileInput.click(); });
@@ -342,10 +395,12 @@
   });
 
   // --- wire up live rendering -------------------------------------------
-  ['text', 'ssid', 'pass', 'enc', 'hidden-net', 'ec', 'margin'].forEach(function (id) {
+  ['text', 'ssid', 'pass', 'enc', 'hidden-net', 'file-encoding', 'ec', 'margin'].forEach(function (id) {
     $(id).addEventListener('input', render);
   });
 
+  $('file-encoding').addEventListener('input', updateFileEncodingNote);
+  updateFileEncodingNote();
   render();
 })();
 </script>

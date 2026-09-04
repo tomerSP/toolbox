@@ -10,6 +10,7 @@ source of truth for current behavior.
   about 2 KB.
 - Text uses Numeric, Alphanumeric, or Byte mode based on the full payload.
 - Non-ASCII text is encoded as UTF-8.
+- Files can use compatible base64 `data:` URIs or higher-capacity raw bytes.
 - Decoding is not implemented.
 
 ## Product boundary
@@ -61,7 +62,7 @@ are unnecessary.
 
 - [x] Select Numeric, Alphanumeric, or Byte mode for whole payloads.
 - [x] Keep the capacity meter aligned with that mode and correction level.
-- Add raw-byte file encoding with an honest compatibility explanation.
+- [x] Add raw-byte file encoding with an honest compatibility explanation.
 
 ### F2 — Packed round trip
 

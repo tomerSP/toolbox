@@ -11,7 +11,7 @@ source of truth for current behavior.
 - Text uses Numeric, Alphanumeric, or Byte mode based on the full payload.
 - Non-ASCII text is encoded as UTF-8.
 - Files can use compatible base64 `data:` URIs or higher-capacity raw bytes.
-- Decoding is not implemented.
+- Decodes QR codes from uploaded images as text or downloadable raw bytes.
 
 ## Product boundary
 
@@ -67,8 +67,9 @@ are unnecessary.
 ### F2 — Packed round trip
 
 - Add `TQR1` encoding with `deflate-raw` and stored fallback.
-- Vendor a QR reader with its license.
-- Decode uploaded images in-browser and restore file metadata.
+- [x] Vendor a QR reader with its license.
+- [x] Decode uploaded images in-browser as text or raw bytes.
+- Restore file metadata from Packed codes.
 - Consider camera input only after image upload is reliable.
 
 ### F3 — Multiple codes

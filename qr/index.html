@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>File &amp; text to QR code — free, offline, no upload</title>
-<meta name="description" content="Turn a link, text, Wi-Fi login or a small file into a QR code and download it as PNG or SVG. Runs entirely in your browser — nothing is uploaded.">
+<title>QR code generator &amp; image decoder — free and offline</title>
+<meta name="description" content="Create a QR code from text, Wi-Fi details or a small file, or decode a QR code from an image. Free, private and entirely in your browser.">
 <link rel="stylesheet" href="../assets/style.css">
 <style>
   .tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
@@ -29,8 +29,11 @@
   .drop.hot { border-color: var(--accent); color: var(--ink); }
   .drop strong { color: var(--ink); display: block; margin-bottom: 4px; }
 
-  #out { background: #fff; border-radius: var(--radius); padding: 12px; display: grid; place-items: center; min-height: 240px; }
+  #out, .scan-preview { border-radius: var(--radius); padding: 12px; display: grid; place-items: center; min-height: 240px; }
+  #out { background: #fff; }
   #out svg { width: 100%; height: auto; display: block; }
+  .scan-preview { background: var(--panel); border: 1px solid var(--line); overflow: hidden; }
+  .scan-preview canvas { display: block; max-width: 100%; height: auto; }
   .empty { color: #999; font-size: 14px; text-align: center; }
 
   .actions { display: flex; gap: 8px; margin-top: 12px; }
@@ -53,17 +56,18 @@
   <div class="crumb"><a href="../">← Tomer's Toolbox</a></div>
 
   <header class="site">
-    <h1>File &amp; text → QR code</h1>
+    <h1>QR code generator &amp; image decoder</h1>
   </header>
   <p class="lede">
-    Paste a link, type some text, share a Wi-Fi login, or drop in a small file.
-    Nothing leaves your browser.
+    Create a code from text, Wi-Fi details or a small file—or decode one from
+    an image. Nothing leaves your browser.
   </p>
 
   <div class="tabs" role="tablist">
     <button role="tab" id="tab-text" aria-selected="true">Text / URL</button>
     <button role="tab" id="tab-wifi" aria-selected="false">Wi-Fi</button>
     <button role="tab" id="tab-file" aria-selected="false">File</button>
+    <button role="tab" id="tab-scan" aria-selected="false">Scan QR Image</button>
   </div>
 
   <div class="cols">
@@ -116,36 +120,63 @@
         <p id="file-encoding-note" class="note"></p>
       </section>
 
-      <div class="row" style="margin-top:16px">
-        <div class="field">
-          <label for="ec">Error correction</label>
-          <select id="ec">
-            <option value="L">L — most data</option>
-            <option value="M" selected>M — balanced</option>
-            <option value="Q">Q — tolerant</option>
-            <option value="H">H — most tolerant</option>
-          </select>
+      <section id="pane-scan" class="panel" hidden>
+        <div class="drop" id="scan-drop">
+          <strong>Drop a QR image here, or click to choose</strong>
+          PNG, JPEG, GIF, WebP, or another browser-supported image
         </div>
-        <div class="field">
-          <label for="margin">Quiet margin</label>
-          <select id="margin">
-            <option value="4" selected>4 modules (standard)</option>
-            <option value="2">2 modules</option>
-            <option value="0">None</option>
-          </select>
-        </div>
-      </div>
+        <input type="file" id="scan-file" accept="image/*" hidden>
+        <div id="scan-file-name" class="meter"></div>
+        <p class="note">Decoded locally. Images are never uploaded.</p>
+      </section>
 
-      <div id="meter" class="meter"></div>
+      <div id="generator-settings">
+        <div class="row" style="margin-top:16px">
+          <div class="field">
+            <label for="ec">Error correction</label>
+            <select id="ec">
+              <option value="L">L — most data</option>
+              <option value="M" selected>M — balanced</option>
+              <option value="Q">Q — tolerant</option>
+              <option value="H">H — most tolerant</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="margin">Quiet margin</label>
+            <select id="margin">
+              <option value="4" selected>4 modules (standard)</option>
+              <option value="2">2 modules</option>
+              <option value="0">None</option>
+            </select>
+          </div>
+        </div>
+        <div id="meter" class="meter"></div>
+      </div>
     </div>
 
-    <div>
+    <div id="generator-output">
       <div id="out"><div class="empty">Your QR code appears here</div></div>
       <div class="actions">
         <button id="dl-png" class="primary" disabled>PNG</button>
         <button id="dl-svg" disabled>SVG</button>
       </div>
       <p class="note">PNG is exported at 1024&nbsp;px. SVG scales to any size — use it for print.</p>
+    </div>
+
+    <div id="scan-output" hidden>
+      <div class="scan-preview">
+        <canvas id="scan-canvas" hidden></canvas>
+        <div id="scan-placeholder" class="empty">Decoded result appears here</div>
+      </div>
+      <div id="scan-status" class="meter" role="status"></div>
+      <div id="scan-text-field" class="field" hidden>
+        <label for="scan-text">Decoded text</label>
+        <textarea id="scan-text" readonly></textarea>
+      </div>
+      <div class="actions">
+        <button id="copy-scan" class="primary" disabled>Copy text</button>
+        <button id="dl-scan" disabled>Download bytes</button>
+      </div>
     </div>
   </div>
 
@@ -165,11 +196,14 @@
   <footer class="site">
     Runs entirely in your browser — no file is ever uploaded.
     QR encoding by <a href="https://github.com/kazuhikoarase/qrcode-generator">qrcode-generator</a> (MIT).
+    Image decoding by <a href="https://github.com/cozmo/jsQR">jsQR</a>
+    (<a href="./vendor/jsQR.LICENSE">Apache-2.0</a>).
   </footer>
 
 </div>
 
 <script src="./vendor/qrcode.js"></script>
+<script src="./vendor/jsQR.js"></script>
 <script>
 (function () {
   'use strict';
@@ -188,12 +222,14 @@
   var fileDataUri = '';
   var fileBytes = null;
   var fileLoadId = 0;
+  var scanLoadId = 0;
+  var scanResultBytes = null;
   var current = null; // { qr, count, margin }
 
   var $ = function (id) { return document.getElementById(id); };
 
-  var panes = { text: $('pane-text'), wifi: $('pane-wifi'), file: $('pane-file') };
-  var tabs = { text: $('tab-text'), wifi: $('tab-wifi'), file: $('tab-file') };
+  var panes = { text: $('pane-text'), wifi: $('pane-wifi'), file: $('pane-file'), scan: $('pane-scan') };
+  var tabs = { text: $('tab-text'), wifi: $('tab-wifi'), file: $('tab-file'), scan: $('tab-scan') };
 
   Object.keys(tabs).forEach(function (key) {
     tabs[key].addEventListener('click', function () {
@@ -202,7 +238,10 @@
         tabs[k].setAttribute('aria-selected', String(k === key));
         panes[k].hidden = k !== key;
       });
-      render();
+      $('generator-settings').hidden = key === 'scan';
+      $('generator-output').hidden = key === 'scan';
+      $('scan-output').hidden = key !== 'scan';
+      if (key !== 'scan') render();
     });
   });
 
@@ -332,6 +371,135 @@
   $('dl-svg').addEventListener('click', function () {
     if (!current) return;
     download(new Blob([svgFor(current.qr, current.margin, 0)], { type: 'image/svg+xml' }), 'qr.svg');
+  });
+
+  // --- image decoding ---------------------------------------------------
+  var scanDrop = $('scan-drop');
+  var scanInput = $('scan-file');
+
+  function clearScanResult(message, isError) {
+    scanResultBytes = null;
+    $('scan-canvas').hidden = true;
+    $('scan-placeholder').hidden = false;
+    $('scan-placeholder').textContent = message || 'Decoded result appears here';
+    $('scan-status').className = 'meter' + (isError ? ' over' : '');
+    $('scan-status').textContent = isError ? message : '';
+    $('scan-text-field').hidden = true;
+    $('scan-text').value = '';
+    $('copy-scan').disabled = true;
+    $('dl-scan').disabled = true;
+  }
+
+  function decodedText(code, bytes) {
+    var hasByteChunk = code.chunks.some(function (chunk) { return chunk.type === 'byte'; });
+    if (!hasByteChunk) return code.data;
+    if (typeof TextDecoder === 'undefined') return code.data;
+    var text;
+    try {
+      text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch (err) {
+      return null;
+    }
+    return /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text) ? null : text;
+  }
+
+  function scanImage(file) {
+    if (!file) return;
+    var loadId = ++scanLoadId;
+    var reader = new FileReader();
+    clearScanResult('Reading image…', false);
+    $('scan-status').textContent = 'Reading image…';
+    $('scan-file-name').textContent = file.name + ' — ' + file.size.toLocaleString() + ' bytes';
+
+    reader.onerror = function () {
+      if (loadId === scanLoadId) clearScanResult('Could not read this image.', true);
+    };
+    reader.onload = function () {
+      if (loadId !== scanLoadId) return;
+      var image = new Image();
+      image.onerror = function () {
+        if (loadId === scanLoadId) clearScanResult('This file is not a supported image.', true);
+      };
+      image.onload = function () {
+        if (loadId !== scanLoadId) return;
+        var maxSide = 2048;
+        var scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+        var canvas = $('scan-canvas');
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        var context = canvas.getContext('2d');
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+        var pixels;
+        try {
+          pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+        } catch (err) {
+          clearScanResult('Could not inspect this image.', true);
+          return;
+        }
+
+        var code;
+        try {
+          code = jsQR(pixels.data, pixels.width, pixels.height, { inversionAttempts: 'attemptBoth' });
+        } catch (err) {
+          clearScanResult('Could not decode this image.', true);
+          return;
+        }
+        canvas.hidden = false;
+        $('scan-placeholder').hidden = true;
+        if (!code) {
+          clearScanResult('No QR code found. Try a sharper, straighter image.', true);
+          canvas.hidden = false;
+          $('scan-placeholder').hidden = true;
+          return;
+        }
+
+        scanResultBytes = new Uint8Array(code.binaryData);
+        var text = decodedText(code, scanResultBytes);
+        $('scan-status').className = 'meter';
+        $('scan-status').textContent = text === null
+          ? scanResultBytes.length.toLocaleString() + ' binary bytes decoded.'
+          : scanResultBytes.length.toLocaleString() + ' bytes decoded as text.';
+        $('dl-scan').disabled = false;
+        if (text !== null) {
+          $('scan-text').value = text;
+          $('scan-text-field').hidden = false;
+          $('copy-scan').disabled = false;
+        }
+      };
+      image.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  scanDrop.addEventListener('click', function () { scanInput.click(); });
+  scanInput.addEventListener('change', function () { scanImage(scanInput.files[0]); });
+  ['dragenter', 'dragover'].forEach(function (ev) {
+    scanDrop.addEventListener(ev, function (e) { e.preventDefault(); scanDrop.classList.add('hot'); });
+  });
+  ['dragleave', 'drop'].forEach(function (ev) {
+    scanDrop.addEventListener(ev, function (e) { e.preventDefault(); scanDrop.classList.remove('hot'); });
+  });
+  scanDrop.addEventListener('drop', function (e) {
+    if (e.dataTransfer.files.length) scanImage(e.dataTransfer.files[0]);
+  });
+
+  $('copy-scan').addEventListener('click', function () {
+    if ($('copy-scan').disabled) return;
+    var text = $('scan-text').value;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text);
+    } else {
+      $('scan-text').select();
+      document.execCommand('copy');
+    }
+    $('copy-scan').textContent = 'Copied';
+    setTimeout(function () { $('copy-scan').textContent = 'Copy text'; }, 1200);
+  });
+
+  $('dl-scan').addEventListener('click', function () {
+    if (!scanResultBytes) return;
+    download(new Blob([scanResultBytes], { type: 'application/octet-stream' }), 'qr-data.bin');
   });
 
   $('dl-png').addEventListener('click', function () {

@@ -8,7 +8,8 @@ source of truth for current behavior.
 - Encodes text, URLs, Wi-Fi credentials, and small files.
 - Files are wrapped in base64 `data:` URIs, reducing the practical capacity to
   about 2 KB.
-- Encoding is forced to QR Byte mode.
+- Text uses Numeric, Alphanumeric, or Byte mode based on the full payload.
+- Non-ASCII text is encoded as UTF-8.
 - Decoding is not implemented.
 
 ## Product boundary
@@ -58,10 +59,9 @@ are unnecessary.
 
 ### F1 — Use QR capacity better
 
-- Let the QR library select Numeric, Alphanumeric, or Byte mode where possible.
+- [x] Select Numeric, Alphanumeric, or Byte mode for whole payloads.
+- [x] Keep the capacity meter aligned with that mode and correction level.
 - Add raw-byte file encoding with an honest compatibility explanation.
-- Keep the byte counter aligned with the actual selected mode and correction
-  level.
 
 ### F2 — Packed round trip
 

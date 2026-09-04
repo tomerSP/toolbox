@@ -159,8 +159,15 @@
 (function () {
   'use strict';
 
-  // Byte-mode capacity at QR version 40, per error-correction level.
-  var CAPACITY = { L: 2953, M: 2331, Q: 1663, H: 1273 };
+  // The vendored encoder defaults to Latin-1; keep non-ASCII text intact.
+  qrcode.stringToBytes = qrcode.stringToBytesFuncs['UTF-8'];
+
+  // Maximum capacity at QR version 40, per mode and error-correction level.
+  var CAPACITY = {
+    Numeric: { L: 7089, M: 5596, Q: 3993, H: 3057 },
+    Alphanumeric: { L: 4296, M: 3391, Q: 2420, H: 1852 },
+    Byte: { L: 2953, M: 2331, Q: 1663, H: 1273 }
+  };
 
   var mode = 'text';
   var fileDataUri = '';
@@ -204,6 +211,16 @@
     return new TextEncoder().encode(s).length;
   }
 
+  function encodingFor(data) {
+    if (/^[0-9]+$/.test(data)) {
+      return { mode: 'Numeric', count: data.length, unit: 'digits' };
+    }
+    if (/^[0-9A-Z $%*+\-./:]+$/.test(data)) {
+      return { mode: 'Alphanumeric', count: data.length, unit: 'characters' };
+    }
+    return { mode: 'Byte', count: byteLength(data), unit: 'bytes' };
+  }
+
   function svgFor(qr, margin, px) {
     var n = qr.getModuleCount();
     var size = n + margin * 2;
@@ -224,8 +241,9 @@
     var data = payload();
     var ec = $('ec').value;
     var margin = parseInt($('margin').value, 10);
-    var count = byteLength(data);
-    var cap = CAPACITY[ec];
+    var encoding = encodingFor(data);
+    var count = encoding.count;
+    var cap = CAPACITY[encoding.mode][ec];
     var meter = $('meter');
     var out = $('out');
 
@@ -240,19 +258,13 @@
       return;
     }
 
-    meter.className = 'meter' + (count > cap ? ' over' : '');
+    meter.className = 'meter';
     meter.textContent = count.toLocaleString() + ' / ' + cap.toLocaleString() +
-      ' bytes at level ' + ec +
-      (count > cap ? ' — too much data. Lower the error correction, or shorten the input.' : '');
-
-    if (count > cap) {
-      out.innerHTML = '<div class="empty">Too much data to encode</div>';
-      return;
-    }
+      ' ' + encoding.unit + ' in ' + encoding.mode.toLowerCase() + ' mode at level ' + ec;
 
     try {
       var qr = qrcode(0, ec);           // 0 = pick the smallest version that fits
-      qr.addData(data, 'Byte');
+      qr.addData(data, encoding.mode);
       qr.make();
       out.innerHTML = svgFor(qr, margin, 0);
       current = { qr: qr, margin: margin };
@@ -260,8 +272,8 @@
       $('dl-svg').disabled = false;
     } catch (err) {
       meter.className = 'meter over';
-      meter.textContent = 'Could not encode this input: ' + err.message;
-      out.innerHTML = '<div class="empty">Could not encode</div>';
+      meter.textContent += ' — too much data. Lower the error correction, or shorten the input.';
+      out.innerHTML = '<div class="empty">Too much data to encode</div>';
     }
   }
 

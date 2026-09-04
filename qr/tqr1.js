@@ -208,9 +208,109 @@ var TQR1 = function () {
     };
   }
 
+  function streamError(message, code) {
+    var error = new Error(message);
+    error.code = code;
+    return error;
+  }
+
+  function transformBytes(bytes, Constructor, unsupportedMessage) {
+    if (typeof Constructor === 'undefined') {
+      return Promise.reject(streamError(unsupportedMessage, 'unsupported'));
+    }
+
+    var stream;
+    try {
+      stream = new Constructor('deflate-raw');
+    } catch (err) {
+      return Promise.reject(streamError(unsupportedMessage, 'unsupported'));
+    }
+
+    var reader = stream.readable.getReader();
+    var writer = stream.writable.getWriter();
+    var chunks = [];
+    var total = 0;
+
+    function readNext() {
+      return reader.read().then(function (result) {
+        if (result.done) {
+          var output = new Uint8Array(total);
+          var offset = 0;
+          chunks.forEach(function (chunk) {
+            output.set(chunk, offset);
+            offset += chunk.length;
+          });
+          return Array.prototype.slice.call(output);
+        }
+        chunks.push(result.value);
+        total += result.value.length;
+        return readNext();
+      });
+    }
+
+    var outputPromise = readNext();
+    var inputPromise = writer.write(new Uint8Array(bytes))
+      .then(function () { return writer.close(); });
+    return Promise.all([outputPromise, inputPromise])
+      .then(function (results) { return results[0]; });
+  }
+
+  function pack(options) {
+    options = options || {};
+    var payload = copyBytes(options.payload, 'Payload');
+    var stored = encode({
+      payload: payload,
+      filename: options.filename,
+      mimeType: options.mimeType
+    });
+
+    if (typeof CompressionStream === 'undefined') {
+      return Promise.resolve({ bytes: stored, algorithm: 'stored', reason: 'unsupported' });
+    }
+
+    return transformBytes(payload, CompressionStream,
+      'This browser cannot create DEFLATE raw streams.')
+      .then(function (compressed) {
+        var packed = encode({
+          algorithm: 'deflate-raw',
+          originalLength: payload.length,
+          payload: compressed,
+          filename: options.filename,
+          mimeType: options.mimeType
+        });
+        return packed.length < stored.length
+          ? { bytes: packed, algorithm: 'deflate-raw', reason: 'smaller' }
+          : { bytes: stored, algorithm: 'stored', reason: 'not-smaller' };
+      }, function (err) {
+        return {
+          bytes: stored,
+          algorithm: 'stored',
+          reason: err && err.code === 'unsupported' ? 'unsupported' : 'failed'
+        };
+      });
+  }
+
+  function unpack(input) {
+    var container = decode(input);
+    if (container.algorithm === 'stored') return Promise.resolve(container);
+
+    return transformBytes(container.payload,
+      typeof DecompressionStream === 'undefined' ? undefined : DecompressionStream,
+      'This browser cannot open DEFLATE raw streams.')
+      .then(function (payload) {
+        if (payload.length !== container.originalLength) {
+          fail('Decompressed TQR1 payload length does not match its header.');
+        }
+        container.payload = payload;
+        return container;
+      });
+  }
+
   return {
     decode: decode,
     encode: encode,
-    isContainer: isContainer
+    isContainer: isContainer,
+    pack: pack,
+    unpack: unpack
   };
 }();

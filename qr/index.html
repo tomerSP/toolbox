@@ -231,6 +231,9 @@
   var fileName = '';
   var fileMimeType = '';
   var fileLoadId = 0;
+  var packedBytes = null;
+  var packedState = 'idle';
+  var packedReason = '';
   var scanLoadId = 0;
   var scanResultBytes = null;
   var scanDownloadName = 'qr-data.bin';
@@ -304,12 +307,53 @@
     }
   }
 
+  function preparePackedFile() {
+    if (!fileBytes || packedState === 'loading' || packedState === 'ready') return;
+    var loadId = fileLoadId;
+    packedState = 'loading';
+    packedReason = '';
+    updateFileEncodingNote();
+    TQR1.pack({ payload: fileBytes, filename: fileName, mimeType: fileMimeType })
+      .then(function (result) {
+        if (loadId !== fileLoadId) return;
+        packedBytes = result.bytes;
+        packedState = 'ready';
+        packedReason = result.reason;
+        updateFileEncodingNote();
+        render();
+      }, function () {
+        if (loadId !== fileLoadId) return;
+        packedBytes = null;
+        packedState = 'error';
+        updateFileEncodingNote();
+        render();
+      });
+  }
+
   function updateFileEncodingNote() {
     var encoding = $('file-encoding').value;
     if (encoding === 'packed') {
       $('file-encoding-note').innerHTML =
-        'Preserves the filename and file type without base64 overhead. <span class="file-warning">Only this site promises to restore Packed files.</span>';
-      $('file-limit').textContent = 'QR codes are tiny — file plus metadata must stay under ~2.9 KB';
+        'Compresses when useful and preserves the filename and file type. <span class="file-warning">Only this site promises to restore Packed files.</span>';
+      if (packedState === 'loading') {
+        $('file-encoding-note').appendChild(document.createTextNode(' Compressing locally…'));
+      } else if (packedState === 'ready' && packedReason === 'smaller') {
+        $('file-encoding-note').appendChild(document.createTextNode(
+          ' Compressed ' + fileBytes.length.toLocaleString() + ' raw bytes to ' +
+          packedBytes.length.toLocaleString() + ' packed bytes.'));
+      } else if (packedState === 'ready' && packedReason === 'not-smaller') {
+        $('file-encoding-note').appendChild(document.createTextNode(
+          ' Compression did not reduce the result, so the original bytes are stored.'));
+      } else if (packedState === 'ready' && packedReason === 'unsupported') {
+        $('file-encoding-note').appendChild(document.createTextNode(
+          ' Compression is unavailable in this browser, so the original bytes are stored.'));
+      } else if (packedState === 'ready' && packedReason === 'failed') {
+        $('file-encoding-note').appendChild(document.createTextNode(
+          ' Compression failed, so the original bytes are stored.'));
+      } else if (packedState === 'error') {
+        $('file-encoding-note').appendChild(document.createTextNode(' Could not prepare this file.'));
+      }
+      $('file-limit').textContent = 'Packed result must stay under ~2.9 KB; compressible files may start larger';
     } else if (encoding === 'raw') {
       $('file-encoding-note').innerHTML =
         'Fits up to 2,953 bytes at level L. The filename is not included. <span class="file-warning">Most scanners cannot identify the file type or save arbitrary bytes correctly.</span>';
@@ -340,10 +384,10 @@
   function render() {
     var fileEncoding = mode === 'file' ? $('file-encoding').value : '';
     var binaryFile = fileEncoding === 'raw' || fileEncoding === 'packed';
-    var data = binaryFile ? fileBytes : payload();
-    if (fileEncoding === 'packed' && data) {
-      data = TQR1.encode({ payload: data, filename: fileName, mimeType: fileMimeType });
-    }
+    if (fileEncoding === 'packed' && fileBytes && packedState === 'idle') preparePackedFile();
+    var data = fileEncoding === 'packed'
+      ? (packedState === 'ready' ? packedBytes : null)
+      : (binaryFile ? fileBytes : payload());
     var ec = $('ec').value;
     var margin = parseInt($('margin').value, 10);
     var encoding = binaryFile
@@ -358,6 +402,20 @@
     $('dl-png').disabled = true;
     $('dl-svg').disabled = true;
     $('copy-qr').disabled = true;
+
+    if (fileEncoding === 'packed' && fileBytes && packedState === 'loading') {
+      meter.className = 'meter';
+      meter.textContent = 'Compressing locally…';
+      out.innerHTML = '<div class="empty">Preparing Packed file</div>';
+      return;
+    }
+
+    if (fileEncoding === 'packed' && packedState === 'error') {
+      meter.className = 'meter over';
+      meter.textContent = 'Could not prepare this Packed file.';
+      out.innerHTML = '<div class="empty">Could not prepare file</div>';
+      return;
+    }
 
     if (!data || (fileEncoding === 'raw' && !data.length)) {
       meter.className = 'meter';
@@ -464,6 +522,30 @@
     return /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text) ? null : text;
   }
 
+  function showDecodedResult(code, packed, bytes) {
+    scanResultBytes = new Uint8Array(bytes);
+    if (packed) {
+      scanDownloadName = safeFilename(packed.filename);
+      scanDownloadType = packed.mimeType || 'application/octet-stream';
+    }
+    var text = decodedText(code, scanResultBytes);
+    $('scan-status').className = 'meter';
+    $('scan-status').textContent = packed
+      ? 'Packed file decoded: ' + scanDownloadName + ' — ' +
+        scanResultBytes.length.toLocaleString() + ' bytes' +
+        (packed.mimeType ? ' — ' + packed.mimeType : '') + '.'
+      : (text === null
+        ? scanResultBytes.length.toLocaleString() + ' binary bytes decoded.'
+        : scanResultBytes.length.toLocaleString() + ' bytes decoded as text.');
+    $('dl-scan').disabled = false;
+    $('dl-scan').textContent = packed ? 'Download file' : 'Download bytes';
+    if (text !== null) {
+      $('scan-text').value = text;
+      $('scan-text-field').hidden = false;
+      $('copy-scan').disabled = false;
+    }
+  }
+
   function scanImage(file, displayName) {
     if (!file) return;
     var loadId = ++scanLoadId;
@@ -516,43 +598,33 @@
           return;
         }
 
-        scanResultBytes = new Uint8Array(code.binaryData);
-        var packed = null;
-        if (TQR1.isContainer(scanResultBytes)) {
+        var decodedBytes = new Uint8Array(code.binaryData);
+        if (TQR1.isContainer(decodedBytes)) {
+          var unpacking;
           try {
-            packed = TQR1.decode(scanResultBytes);
+            unpacking = TQR1.unpack(decodedBytes);
           } catch (err) {
             clearScanResult('This Packed QR code is damaged or unsupported.', true);
             canvas.hidden = false;
             $('scan-placeholder').hidden = true;
             return;
           }
-          if (packed.algorithm !== 'stored') {
-            clearScanResult('This Packed QR code uses compression that is not supported yet.', true);
+          $('scan-status').className = 'meter';
+          $('scan-status').textContent = 'Unpacking locally…';
+          unpacking.then(function (packed) {
+            if (loadId !== scanLoadId) return;
+            showDecodedResult(code, packed, packed.payload);
+          }, function (err) {
+            if (loadId !== scanLoadId) return;
+            clearScanResult(err && err.code === 'unsupported'
+              ? 'This browser cannot unpack compressed QR files.'
+              : 'This Packed QR code is damaged or unsupported.', true);
             canvas.hidden = false;
             $('scan-placeholder').hidden = true;
-            return;
-          }
-          scanResultBytes = new Uint8Array(packed.payload);
-          scanDownloadName = safeFilename(packed.filename);
-          scanDownloadType = packed.mimeType || 'application/octet-stream';
+          });
+          return;
         }
-        var text = decodedText(code, scanResultBytes);
-        $('scan-status').className = 'meter';
-        $('scan-status').textContent = packed
-          ? 'Packed file decoded: ' + scanDownloadName + ' — ' +
-            scanResultBytes.length.toLocaleString() + ' bytes' +
-            (packed.mimeType ? ' — ' + packed.mimeType : '') + '.'
-          : (text === null
-            ? scanResultBytes.length.toLocaleString() + ' binary bytes decoded.'
-            : scanResultBytes.length.toLocaleString() + ' bytes decoded as text.');
-        $('dl-scan').disabled = false;
-        $('dl-scan').textContent = packed ? 'Download file' : 'Download bytes';
-        if (text !== null) {
-          $('scan-text').value = text;
-          $('scan-text-field').hidden = false;
-          $('copy-scan').disabled = false;
-        }
+        showDecodedResult(code, null, decodedBytes);
       };
       image.src = reader.result;
     };
@@ -676,6 +748,9 @@
     var bytesReader = new FileReader();
     fileDataUri = '';
     fileBytes = null;
+    packedBytes = null;
+    packedState = 'idle';
+    packedReason = '';
     fileName = file.name || '';
     fileMimeType = file.type || '';
     $('file-name').textContent = file.name + ' — ' + file.size.toLocaleString() + ' bytes raw';
@@ -708,11 +783,14 @@
   });
 
   // --- wire up live rendering -------------------------------------------
-  ['text', 'ssid', 'pass', 'enc', 'hidden-net', 'file-encoding', 'ec', 'margin'].forEach(function (id) {
+  ['text', 'ssid', 'pass', 'enc', 'hidden-net', 'ec', 'margin'].forEach(function (id) {
     $(id).addEventListener('input', render);
   });
 
-  $('file-encoding').addEventListener('input', updateFileEncodingNote);
+  $('file-encoding').addEventListener('input', function () {
+    updateFileEncodingNote();
+    render();
+  });
   updateFileEncodingNote();
   render();
 })();

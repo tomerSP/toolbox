@@ -72,5 +72,38 @@
   }, 'stored encode length mismatch');
 
   if (typeof WScript !== 'undefined') WScript.Echo('TQR1 checks passed');
-  if (typeof document !== 'undefined') document.body.textContent = 'TQR1 checks passed';
+  if (typeof document !== 'undefined') {
+    var repeated = [];
+    for (var i = 0; i < 4096; i++) repeated.push(65);
+    TQR1.pack({ payload: repeated, filename: 'repeat.txt', mimeType: 'text/plain' })
+      .then(function (packed) {
+        if (packed.algorithm === 'stored') {
+          assert(packed.reason === 'unsupported' || packed.reason === 'failed',
+            'unavailable compression falls back to stored');
+          return null;
+        }
+        assert(packed.algorithm === 'deflate-raw', 'compressible payload uses DEFLATE raw');
+        assert(packed.bytes.length < repeated.length, 'compressed container is smaller');
+        return TQR1.unpack(packed.bytes);
+      })
+      .then(function (unpacked) {
+        if (!unpacked) return null;
+        assert(unpacked.algorithm === 'deflate-raw', 'compressed algorithm round trip');
+        assert(unpacked.filename === 'repeat.txt', 'compressed filename round trip');
+        assert(unpacked.mimeType === 'text/plain', 'compressed MIME round trip');
+        equalBytes(unpacked.payload, repeated, 'compressed payload round trip');
+        return TQR1.pack({ payload: [1] });
+      })
+      .then(function (packed) {
+        if (packed) {
+          assert(packed.algorithm === 'stored', 'larger compression falls back to stored');
+          assert(packed.reason === 'not-smaller', 'stored fallback reason');
+        }
+        document.body.textContent = 'TQR1 checks passed';
+      })
+      .then(null, function (err) {
+        document.body.textContent = 'TQR1 checks failed: ' + err.message;
+        document.body.style.color = 'red';
+      });
+  }
 })();

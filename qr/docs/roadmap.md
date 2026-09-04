@@ -11,7 +11,9 @@ source of truth for current behavior.
 - Text uses Numeric, Alphanumeric, or Byte mode based on the full payload.
 - Non-ASCII text is encoded as UTF-8.
 - Files can use compatible base64 `data:` URIs or higher-capacity raw bytes.
-- Stored Packed files preserve filename and MIME metadata for this site's decoder.
+- Packed files preserve metadata and use DEFLATE raw when it reduces total size.
+- Packed encoding falls back to stored bytes when compression is unavailable,
+  fails, or makes the container larger.
 - Decodes QR codes from uploaded images as text or downloadable raw bytes.
 - Copies generated QR images and pastes QR images through the clipboard.
 
@@ -75,11 +77,11 @@ are unnecessary.
 
 - [x] Implement and test the versioned `TQR1` container codec.
 - [x] Add stored Packed file encoding and restore its metadata when decoding.
-- Add `TQR1` encoding with `deflate-raw` and stored fallback.
+- [x] Add `TQR1` encoding with `deflate-raw` and stored fallback.
 - [x] Vendor a QR reader with its license.
 - [x] Decode uploaded images in-browser as text or raw bytes.
 - [x] Add clipboard copy and paste for QR images.
-- Restore file metadata from Packed codes.
+- [x] Restore file metadata from Packed codes.
 - Consider camera input only after image upload is reliable.
 
 ### F3 — Multiple codes

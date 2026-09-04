@@ -82,6 +82,7 @@ are unnecessary.
 - [x] Decode uploaded images in-browser as text or raw bytes.
 - [x] Add clipboard copy and paste for QR images.
 - [x] Restore file metadata from Packed codes.
+- [x] Separate Standard, Packed, and Raw file formats visibly in the UI.
 - Consider camera input only after image upload is reliable.
 
 ### F3 — Multiple codes

@@ -1,6 +1,5 @@
-# Agent files — local guidance, not part of the site
+# Local agent files
 CLAUDE.md
-AGENTS.md
 .claude/
 
 # Editor / OS noise

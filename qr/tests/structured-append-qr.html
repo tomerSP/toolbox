@@ -1,0 +1,96 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Structured Append QR round trip</title>
+<body>Running…</body>
+<script src="../vendor/qrcode.js"></script>
+<script src="../vendor/jsQR.js"></script>
+<script src="../structured-append.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  function assert(value, message) {
+    if (!value) throw new Error(message);
+  }
+
+  function addBytes(qr, bytes) {
+    var original = qrcode.stringToBytes;
+    qrcode.stringToBytes = function () { return bytes; };
+    try {
+      qr.addData('', 'Byte');
+    } finally {
+      qrcode.stringToBytes = original;
+    }
+  }
+
+  function pixelsFor(qr) {
+    var margin = 4;
+    var scale = 8;
+    var modules = qr.getModuleCount();
+    var size = (modules + margin * 2) * scale;
+    var canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    var context = canvas.getContext('2d');
+    context.fillStyle = '#fff';
+    context.fillRect(0, 0, size, size);
+    context.fillStyle = '#000';
+    for (var row = 0; row < modules; row++) {
+      for (var column = 0; column < modules; column++) {
+        if (qr.isDark(row, column)) {
+          context.fillRect((column + margin) * scale, (row + margin) * scale, scale, scale);
+        }
+      }
+    }
+    return context.getImageData(0, 0, size, size);
+  }
+
+  function makePart(size) {
+    var data = new Uint8Array(size);
+    var qr = qrcode(0, 'M');
+    qr.addStructuredAppend(0, 2, 0);
+    addBytes(qr, data);
+    qr.make();
+    return qr;
+  }
+
+  try {
+    var input = new Uint8Array(257);
+    for (var i = 0; i < input.length; i++) input[i] = i & 255;
+    var parts = StructuredAppend.split(input, 130, 16);
+    var parity = StructuredAppend.parity(input);
+    var collection = new StructuredAppend.Collection();
+    var status;
+
+    for (var part = parts.length - 1; part >= 0; part--) {
+      var qr = qrcode(0, 'M');
+      qr.addStructuredAppend(part, parts.length, parity);
+      addBytes(qr, parts[part]);
+      qr.make();
+      var pixels = pixelsFor(qr);
+      var decoded = jsQR(pixels.data, pixels.width, pixels.height);
+      assert(decoded, 'part ' + (part + 1) + ' decodes');
+      assert(decoded.structuredAppend, 'Structured Append metadata exposed');
+      assert(decoded.structuredAppend.index === part, 'part index');
+      assert(decoded.structuredAppend.count === parts.length, 'part count');
+      assert(decoded.structuredAppend.parity === parity, 'part parity');
+      status = collection.add(decoded.structuredAppend, decoded.binaryData);
+    }
+
+    assert(status.bytes.length === input.length, 'combined length');
+    for (var j = 0; j < input.length; j++) assert(status.bytes[j] === input[j], 'byte ' + j);
+    assert(makePart(2329).getModuleCount() === 177, 'version 40 M capacity');
+    var overflowed = false;
+    try {
+      makePart(2330);
+    } catch (err) {
+      overflowed = true;
+    }
+    assert(overflowed, 'Structured Append capacity boundary');
+    document.body.textContent = 'Structured Append QR round trip passed';
+  } catch (err) {
+    document.body.textContent = 'Structured Append QR round trip failed: ' + err.message;
+    document.body.style.color = 'red';
+    throw err;
+  }
+})();
+</script>

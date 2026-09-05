@@ -338,7 +338,9 @@ var qrcode = function() {
       for (var i = 0; i < dataList.length; i += 1) {
         var data = dataList[i];
         buffer.put(data.getMode(), 4);
-        buffer.put(data.getLength(), QRUtil.getLengthInBits(data.getMode(), typeNumber) );
+        if (data.getMode() != QRMode.MODE_STRUCTURED_APPEND) {
+          buffer.put(data.getLength(), QRUtil.getLengthInBits(data.getMode(), typeNumber) );
+        }
         data.write(buffer);
       }
 
@@ -410,6 +412,11 @@ var qrcode = function() {
       _dataCache = null;
     };
 
+    _this.addStructuredAppend = function(index, count, parity) {
+      _dataList.push(qrStructuredAppend(index, count, parity) );
+      _dataCache = null;
+    };
+
     _this.isDark = function(row, col) {
       if (row < 0 || _moduleCount <= row || col < 0 || _moduleCount <= col) {
         throw row + ',' + col;
@@ -432,7 +439,9 @@ var qrcode = function() {
           for (var i = 0; i < _dataList.length; i++) {
             var data = _dataList[i];
             buffer.put(data.getMode(), 4);
-            buffer.put(data.getLength(), QRUtil.getLengthInBits(data.getMode(), typeNumber) );
+            if (data.getMode() != QRMode.MODE_STRUCTURED_APPEND) {
+              buffer.put(data.getLength(), QRUtil.getLengthInBits(data.getMode(), typeNumber) );
+            }
             data.write(buffer);
           }
 
@@ -825,7 +834,8 @@ var qrcode = function() {
     MODE_NUMBER :    1 << 0,
     MODE_ALPHA_NUM : 1 << 1,
     MODE_8BIT_BYTE : 1 << 2,
-    MODE_KANJI :     1 << 3
+    MODE_KANJI :     1 << 3,
+    MODE_STRUCTURED_APPEND : 3
   };
 
   //---------------------------------------------------------------------
@@ -1595,6 +1605,32 @@ var qrcode = function() {
       }
 
       _length += 1;
+    };
+
+    return _this;
+  };
+
+  //---------------------------------------------------------------------
+  // qrStructuredAppend
+  //---------------------------------------------------------------------
+
+  var qrStructuredAppend = function(index, count, parity) {
+
+    if (index < 0 || index >= count || count < 1 || count > 16 ||
+        parity < 0 || parity > 255) {
+      throw 'invalid structured append header';
+    }
+
+    var _this = {};
+
+    _this.getMode = function() {
+      return QRMode.MODE_STRUCTURED_APPEND;
+    };
+
+    _this.write = function(buffer) {
+      buffer.put(index, 4);
+      buffer.put(count - 1, 4);
+      buffer.put(parity, 8);
     };
 
     return _this;

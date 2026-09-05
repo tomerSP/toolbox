@@ -32,6 +32,9 @@
   #out, .scan-preview { border-radius: var(--radius); padding: 12px; display: grid; place-items: center; min-height: 240px; }
   #out { background: #fff; }
   #out svg { width: 100%; height: auto; display: block; }
+  #out.multi { grid-template-columns: 1fr; gap: 12px; }
+  .qr-part { margin: 0; min-width: 0; }
+  .qr-part figcaption { color: #000; font: 12px var(--mono); margin-top: 4px; text-align: center; }
   .scan-preview { background: var(--panel); border: 1px solid var(--line); overflow: hidden; }
   .scan-preview canvas { display: block; max-width: 100%; height: auto; }
   .empty { color: #999; font-size: 14px; text-align: center; }
@@ -58,6 +61,9 @@
     border: 1px solid var(--line); border-radius: var(--radius); color: var(--muted);
     font-size: 12px; font-weight: 600; margin-bottom: 8px; padding: 7px 10px;
   }
+  .check-label { align-items: center; cursor: pointer; display: inline-flex; gap: 6px; }
+  .check-label input { margin: 0; width: auto; }
+  .structured-option { font-size: 13px; margin-top: 10px; }
   @media (max-width: 520px) { .encoding-grid { grid-template-columns: 1fr; } }
   .file-warning { color: #9a4a1e; font-weight: 600; }
   @media (prefers-color-scheme: dark) {
@@ -117,7 +123,7 @@
           <input type="text" id="pass" autocomplete="off">
         </div>
         <div class="field">
-          <label><input type="checkbox" id="hidden-net" style="width:auto;margin-right:6px">Hidden network</label>
+          <label class="check-label"><input type="checkbox" id="hidden-net">Hidden network</label>
         </div>
       </section>
 
@@ -150,15 +156,19 @@
 
       <section id="pane-scan" class="panel" hidden>
         <div class="drop" id="scan-drop">
-          <strong>Drop, paste, or choose a QR image</strong>
+          <strong>Drop, paste, or choose a QR image or sheet</strong>
           PNG, JPEG, GIF, WebP, or another browser-supported image
         </div>
         <input type="file" id="scan-file" accept="image/*" hidden>
         <div class="actions">
           <button id="paste-scan" type="button">Paste image</button>
+          <button id="clear-parts" type="button" disabled>Clear parts</button>
         </div>
         <div id="scan-file-name" class="meter"></div>
-        <p class="note">You can also press Ctrl+V or ⌘V. Decoded locally; images are never uploaded.</p>
+        <div id="sa-progress" class="format-status" role="status" hidden></div>
+        <p class="note">You can also press Ctrl+V or ⌘V. A full multiple-code
+          sheet is assembled at once; partial sets accumulate in this tab.
+          Decoded locally; images are never uploaded.</p>
       </section>
 
       <div id="generator-settings">
@@ -181,6 +191,11 @@
             </select>
           </div>
         </div>
+        <label class="check-label structured-option">
+          <input type="checkbox" id="structured-append">
+          Split oversized data into up to 16 QR codes
+        </label>
+        <div id="structured-note" class="meter">Uses standard Structured Append; scanner support varies.</div>
         <div id="meter" class="meter"></div>
       </div>
     </div>
@@ -193,7 +208,7 @@
         <button id="dl-svg" disabled>SVG</button>
         <button id="copy-qr" disabled>Copy image</button>
       </div>
-      <p class="note">PNG is exported at 1024&nbsp;px. SVG scales to any size — use it for print.</p>
+      <p class="note">Single PNGs export at 1024&nbsp;px. Multiple codes export together as a labeled sheet. SVG scales to any size.</p>
     </div>
 
     <div id="scan-output" hidden>
@@ -222,8 +237,10 @@
       extra on top of the raw size, so the practical limit is roughly 2&nbsp;KB.
       Raw-byte mode uses the full capacity, but ordinary scanners may not know
       the file type or how to save it. Packed mode spends a few bytes preserving
-      the filename and type, but only this site promises to restore it. Larger
-      files must be uploaded somewhere and linked to by URL.
+      the filename and type, but only this site promises to restore it. Enable
+      multiple codes to split larger results across up to 16 Structured Append
+      symbols; scanner support varies. Anything beyond that must be uploaded
+      somewhere and linked to by URL.
     </p>
   </details>
 
@@ -239,6 +256,7 @@
 <script src="./vendor/qrcode.js"></script>
 <script src="./vendor/jsQR.js"></script>
 <script src="./tqr1.js"></script>
+<script src="./structured-append.js"></script>
 <script>
 (function () {
   'use strict';
@@ -266,7 +284,8 @@
   var scanResultBytes = null;
   var scanDownloadName = 'qr-data.bin';
   var scanDownloadType = 'application/octet-stream';
-  var current = null; // { qr, count, margin }
+  var structuredCollection = new StructuredAppend.Collection();
+  var current = null; // { qrs, margin, structured }
   var canCopyImage = navigator.clipboard && navigator.clipboard.write &&
     typeof ClipboardItem !== 'undefined';
 
@@ -396,6 +415,9 @@
         'Most compatible. Includes the file type in a data: URI, but base64 reduces practical file capacity to about 2 KB.';
       $('file-limit').textContent = 'QR codes are tiny — keep it under ~2 KB';
     }
+    if ($('structured-append').checked) {
+      $('file-limit').textContent = 'Oversized results can split across up to 16 QR codes';
+    }
   }
 
   function svgFor(qr, margin, px) {
@@ -412,6 +434,44 @@
       ' shape-rendering="crispEdges">' +
       '<rect width="' + size + '" height="' + size + '" fill="#ffffff"/>' +
       '<path fill="#000000" d="' + parts.join('') + '"/></svg>';
+  }
+
+  function renderQrOutput(qrs, margin) {
+    var out = $('out');
+    out.className = qrs.length > 1 ? 'multi' : '';
+    if (qrs.length === 1) {
+      out.innerHTML = svgFor(qrs[0], margin, 0);
+      return;
+    }
+    var html = [];
+    for (var i = 0; i < qrs.length; i++) {
+      html.push('<figure class="qr-part">' + svgFor(qrs[i], margin, 0) +
+        '<figcaption>Part ' + (i + 1) + ' of ' + qrs.length + '</figcaption></figure>');
+    }
+    out.innerHTML = html.join('');
+  }
+
+  function makeQr(data, encoding, binary, ec) {
+    var qr = qrcode(0, ec);
+    if (binary) addByteData(qr, data);
+    else qr.addData(data, encoding.mode);
+    qr.make();
+    return qr;
+  }
+
+  function makeStructuredQrs(data, ec) {
+    var capacity = CAPACITY.Byte[ec] - 2; // Header uses the normal terminator space, then 16 more bits
+    var parts = StructuredAppend.split(data, capacity, 16);
+    var checksum = StructuredAppend.parity(data);
+    var qrs = [];
+    for (var i = 0; i < parts.length; i++) {
+      var qr = qrcode(0, ec);
+      qr.addStructuredAppend(i, parts.length, checksum);
+      addByteData(qr, parts[i]);
+      qr.make();
+      qrs.push(qr);
+    }
+    return qrs;
   }
 
   function render() {
@@ -437,13 +497,17 @@
       : encodingFor(data);
     var count = encoding.count;
     var cap = CAPACITY[encoding.mode][ec];
+    var wantsStructured = $('structured-append').checked;
     var meter = $('meter');
     var out = $('out');
 
     current = null;
+    out.className = '';
     $('dl-png').disabled = true;
     $('dl-svg').disabled = true;
     $('copy-qr').disabled = true;
+    $('dl-png').textContent = 'PNG';
+    $('dl-svg').textContent = 'SVG';
 
     if (selectedFileEncoding === 'packed' && fileBytes && packedState === 'loading') {
       meter.className = 'meter';
@@ -466,23 +530,54 @@
       return;
     }
 
+    var structured = wantsStructured && count > cap;
+    var sourceBytes = structured
+      ? (binaryFile ? new Uint8Array(data) : new Uint8Array(qrcode.stringToBytes(data)))
+      : null;
+    var structuredCapacity = (CAPACITY.Byte[ec] - 2) * 16;
     meter.className = 'meter';
-    meter.textContent = count.toLocaleString() + ' / ' + cap.toLocaleString() +
-      ' ' + encoding.unit + ' in ' + encoding.mode.toLowerCase() + ' mode at level ' + ec;
+    meter.textContent = structured
+      ? sourceBytes.length.toLocaleString() + ' / ' + structuredCapacity.toLocaleString() +
+        ' bytes across up to 16 codes at level ' + ec
+      : count.toLocaleString() + ' / ' + cap.toLocaleString() +
+        ' ' + encoding.unit + ' in ' + encoding.mode.toLowerCase() + ' mode at level ' + ec;
 
     try {
-      var qr = qrcode(0, ec);           // 0 = pick the smallest version that fits
-      if (binaryFile) addByteData(qr, data);
-      else qr.addData(data, encoding.mode);
-      qr.make();
-      out.innerHTML = svgFor(qr, margin, 0);
-      current = { qr: qr, margin: margin };
+      var qrs;
+      if (structured) {
+        qrs = makeStructuredQrs(sourceBytes, ec);
+      } else {
+        try {
+          qrs = [makeQr(data, encoding, binaryFile, ec)];
+        } catch (singleError) {
+          if (!wantsStructured) throw singleError;
+          structured = true;
+          sourceBytes = binaryFile
+            ? new Uint8Array(data)
+            : new Uint8Array(qrcode.stringToBytes(data));
+          qrs = makeStructuredQrs(sourceBytes, ec);
+        }
+      }
+      renderQrOutput(qrs, margin);
+      current = { qrs: qrs, margin: margin, structured: structured };
+      if (structured) {
+        meter.textContent = sourceBytes.length.toLocaleString() + ' bytes across ' +
+          qrs.length + ' of 16 codes at level ' + ec +
+          ' — scanner support varies; keep every part.';
+        $('dl-png').textContent = 'PNG sheet';
+        $('dl-svg').textContent = 'SVG sheet';
+        if (mode === 'file') formatStatus.textContent += ' — ' + qrs.length + '-part Structured Append set';
+      } else if (wantsStructured) {
+        meter.textContent += ' — fits one code; no split needed.';
+      }
       $('dl-png').disabled = false;
       $('dl-svg').disabled = false;
       $('copy-qr').disabled = !canCopyImage;
     } catch (err) {
       meter.className = 'meter over';
-      meter.textContent += ' — too much data. Lower the error correction, or shorten the input.';
+      meter.textContent += structured
+        ? ' — too much data for 16 codes. Lower error correction or shorten the input.'
+        : ' — too much data. Enable multiple codes, lower error correction, or shorten the input.';
       out.innerHTML = '<div class="empty">Too much data to encode</div>';
     }
   }
@@ -503,27 +598,96 @@
       callback(null);
       return;
     }
-    var qr = current.qr, margin = current.margin;
-    var n = qr.getModuleCount(), size = n + margin * 2;
-    var target = 1024;
-    var scale = Math.max(1, Math.round(target / size)); // whole pixels per module: no blur
+    var qrs = current.qrs, margin = current.margin;
+    var multi = qrs.length > 1;
+    var columns = multi ? Math.min(4, Math.ceil(Math.sqrt(qrs.length))) : 1;
+    var rows = Math.ceil(qrs.length / columns);
+    var cell = multi ? 512 : 1024;
+    var label = multi ? 36 : 0;
+    var gap = multi ? 24 : 0;
+    var maxSize = 0;
+    for (var i = 0; i < qrs.length; i++) {
+      maxSize = Math.max(maxSize, qrs[i].getModuleCount() + margin * 2);
+    }
+    var scale = Math.max(1, Math.floor((cell - gap * 2) / maxSize));
     var canvas = document.createElement('canvas');
-    canvas.width = canvas.height = size * scale;
+    canvas.width = multi ? columns * cell : maxSize * scale;
+    canvas.height = multi ? rows * (cell + label) : maxSize * scale;
     var ctx = canvas.getContext('2d');
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = '#000000';
-    for (var r = 0; r < n; r++) {
-      for (var c = 0; c < n; c++) {
-        if (qr.isDark(r, c)) ctx.fillRect((c + margin) * scale, (r + margin) * scale, scale, scale);
+    for (var part = 0; part < qrs.length; part++) {
+      var qr = qrs[part];
+      var n = qr.getModuleCount();
+      var size = n + margin * 2;
+      var x = multi ? (part % columns) * cell + Math.floor((cell - size * scale) / 2) : 0;
+      var y = multi ? Math.floor(part / columns) * (cell + label) +
+        Math.floor((cell - size * scale) / 2) : 0;
+      for (var r = 0; r < n; r++) {
+        for (var c = 0; c < n; c++) {
+          if (qr.isDark(r, c)) {
+            ctx.fillRect(x + (c + margin) * scale, y + (r + margin) * scale, scale, scale);
+          }
+        }
+      }
+      if (multi) {
+        ctx.font = '20px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Part ' + (part + 1) + ' of ' + qrs.length,
+          (part % columns) * cell + cell / 2,
+          Math.floor(part / columns) * (cell + label) + cell + 24);
       }
     }
     canvas.toBlob(callback, 'image/png');
   }
 
+  function qrSvg() {
+    if (!current || current.qrs.length === 1) {
+      return current ? svgFor(current.qrs[0], current.margin, 0) : '';
+    }
+    var qrs = current.qrs;
+    var margin = current.margin;
+    var columns = Math.min(4, Math.ceil(Math.sqrt(qrs.length)));
+    var rows = Math.ceil(qrs.length / columns);
+    var maxSize = 0;
+    for (var i = 0; i < qrs.length; i++) {
+      maxSize = Math.max(maxSize, qrs[i].getModuleCount() + margin * 2);
+    }
+    var gap = 6;
+    var label = 8;
+    var cellWidth = maxSize + gap;
+    var cellHeight = maxSize + gap + label;
+    var width = columns * cellWidth;
+    var height = rows * cellHeight;
+    var svg = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + width + ' ' + height +
+      '" shape-rendering="crispEdges"><rect width="' + width + '" height="' + height + '" fill="#ffffff"/>'];
+    for (var part = 0; part < qrs.length; part++) {
+      var qr = qrs[part];
+      var n = qr.getModuleCount();
+      var size = n + margin * 2;
+      var x = (part % columns) * cellWidth + (cellWidth - size) / 2;
+      var y = Math.floor(part / columns) * cellHeight + gap / 2;
+      var path = [];
+      for (var r = 0; r < n; r++) {
+        for (var c = 0; c < n; c++) {
+          if (qr.isDark(r, c)) path.push('M' + (c + margin) + ' ' + (r + margin) + 'h1v1h-1z');
+        }
+      }
+      svg.push('<path fill="#000000" transform="translate(' + x + ' ' + y + ')" d="' + path.join('') + '"/>');
+      svg.push('<text x="' + (part % columns * cellWidth + cellWidth / 2) + '" y="' +
+        (Math.floor(part / columns) * cellHeight + maxSize + label) +
+        '" text-anchor="middle" font-family="sans-serif" font-size="4" fill="#000000">Part ' +
+        (part + 1) + ' of ' + qrs.length + '</text>');
+    }
+    svg.push('</svg>');
+    return svg.join('');
+  }
+
   $('dl-svg').addEventListener('click', function () {
     if (!current) return;
-    download(new Blob([svgFor(current.qr, current.margin, 0)], { type: 'image/svg+xml' }), 'qr.svg');
+    download(new Blob([qrSvg()], { type: 'image/svg+xml' }),
+      current.structured ? 'qr-parts.svg' : 'qr.svg');
   });
 
   // --- image decoding ---------------------------------------------------
@@ -544,6 +708,24 @@
     $('copy-scan').disabled = true;
     $('dl-scan').disabled = true;
     $('dl-scan').textContent = 'Download bytes';
+  }
+
+  function resetStructuredCollection() {
+    structuredCollection.reset();
+    $('sa-progress').hidden = true;
+    $('sa-progress').textContent = '';
+    $('clear-parts').disabled = true;
+  }
+
+  function showStructuredProgress(status) {
+    var identity = status.parity.toString(16).toUpperCase();
+    if (identity.length < 2) identity = '0' + identity;
+    $('sa-progress').hidden = false;
+    $('sa-progress').textContent = 'Set ' + identity + ' — ' + status.received +
+      ' of ' + status.count + ' parts' + (status.missing.length
+        ? ' — missing ' + status.missing.join(', ')
+        : ' — complete');
+    $('clear-parts').disabled = false;
   }
 
   function safeFilename(filename) {
@@ -588,6 +770,209 @@
     }
   }
 
+  function finishDecoded(code, decodedBytes, loadId) {
+    if (TQR1.isContainer(decodedBytes)) {
+      var unpacking;
+      try {
+        unpacking = TQR1.unpack(decodedBytes);
+      } catch (err) {
+        clearScanResult('This Packed QR code is damaged or unsupported.', true);
+        $('scan-canvas').hidden = false;
+        $('scan-placeholder').hidden = true;
+        return;
+      }
+      $('scan-status').className = 'meter';
+      $('scan-status').textContent = 'Unpacking locally…';
+      unpacking.then(function (packed) {
+        if (loadId !== scanLoadId) return;
+        showDecodedResult(code, packed, packed.payload);
+      }, function (err) {
+        if (loadId !== scanLoadId) return;
+        clearScanResult(err && err.code === 'unsupported'
+          ? 'This browser cannot unpack compressed QR files.'
+          : 'This Packed QR code is damaged or unsupported.', true);
+        $('scan-canvas').hidden = false;
+        $('scan-placeholder').hidden = true;
+      });
+      return;
+    }
+    showDecodedResult(code, null, decodedBytes);
+  }
+
+  function maskDecodedCode(pixels, code) {
+    var points = [
+      code.location.topLeftCorner,
+      code.location.topRightCorner,
+      code.location.bottomRightCorner,
+      code.location.bottomLeftCorner
+    ];
+    var minX = pixels.width, minY = pixels.height, maxX = 0, maxY = 0;
+    for (var i = 0; i < points.length; i++) {
+      minX = Math.min(minX, points[i].x);
+      minY = Math.min(minY, points[i].y);
+      maxX = Math.max(maxX, points[i].x);
+      maxY = Math.max(maxY, points[i].y);
+    }
+    var padding = Math.ceil(Math.max(maxX - minX, maxY - minY) * 0.08);
+    minX = Math.max(0, Math.floor(minX) - padding);
+    minY = Math.max(0, Math.floor(minY) - padding);
+    maxX = Math.min(pixels.width - 1, Math.ceil(maxX) + padding);
+    maxY = Math.min(pixels.height - 1, Math.ceil(maxY) + padding);
+    for (var y = minY; y <= maxY; y++) {
+      for (var x = minX; x <= maxX; x++) {
+        var offset = (y * pixels.width + x) * 4;
+        pixels.data[offset] = 255;
+        pixels.data[offset + 1] = 255;
+        pixels.data[offset + 2] = 255;
+        pixels.data[offset + 3] = 255;
+      }
+    }
+  }
+
+  function decodeAllCodes(pixels) {
+    var working = {
+      data: new Uint8ClampedArray(pixels.data),
+      width: pixels.width,
+      height: pixels.height
+    };
+    var codes = [];
+    var seen = {};
+
+    function signature(code) {
+      if (code.structuredAppend) {
+        return 'sa:' + code.structuredAppend.parity + ':' + code.structuredAppend.count +
+          ':' + code.structuredAppend.index;
+      }
+      return 'data:' + code.binaryData.join(',');
+    }
+
+    function add(code) {
+      if (!code) return;
+      var key = signature(code);
+      if (!seen[key]) {
+        seen[key] = true;
+        codes.push(code);
+      }
+    }
+
+    function completeSet() {
+      if (!codes.length || !codes[0].structuredAppend) return false;
+      var header = codes[0].structuredAppend;
+      if (codes.length < header.count) return false;
+      for (var i = 0; i < codes.length; i++) {
+        if (!codes[i].structuredAppend ||
+            codes[i].structuredAppend.parity !== header.parity ||
+            codes[i].structuredAppend.count !== header.count) return false;
+      }
+      return true;
+    }
+
+    for (var i = 0; i < 16; i++) {
+      var code = jsQR(working.data, working.width, working.height, {
+        inversionAttempts: 'attemptBoth'
+      });
+      if (!code) break;
+      add(code);
+      maskDecodedCode(working, code);
+    }
+
+    if (completeSet()) return codes;
+
+    function crop(x, y, width, height) {
+      var data = new Uint8ClampedArray(width * height * 4);
+      for (var row = 0; row < height; row++) {
+        var start = ((y + row) * pixels.width + x) * 4;
+        data.set(pixels.data.subarray(start, start + width * 4), row * width * 4);
+      }
+      return { data: data, width: width, height: height };
+    }
+
+    var layouts = [];
+    var imageRatio = pixels.width / pixels.height;
+    for (var columns = 1; columns <= 4; columns++) {
+      for (var rows = 1; rows <= 4; rows++) {
+        if (columns !== 1 || rows !== 1) {
+          layouts.push({
+            columns: columns,
+            rows: rows,
+            score: Math.abs(imageRatio - columns / rows)
+          });
+        }
+      }
+    }
+    layouts.sort(function (a, b) { return a.score - b.score; });
+
+    for (var layout = 0; layout < layouts.length; layout++) {
+      var cols = layouts[layout].columns;
+      var rowCount = layouts[layout].rows;
+      for (var tileRow = 0; tileRow < rowCount; tileRow++) {
+        for (var tileColumn = 0; tileColumn < cols; tileColumn++) {
+          var left = Math.floor(tileColumn * pixels.width / cols);
+          var top = Math.floor(tileRow * pixels.height / rowCount);
+          var right = Math.ceil((tileColumn + 1) * pixels.width / cols);
+          var bottom = Math.ceil((tileRow + 1) * pixels.height / rowCount);
+          var tile = crop(left, top, right - left, bottom - top);
+          add(jsQR(tile.data, tile.width, tile.height, { inversionAttempts: 'attemptBoth' }));
+          if (completeSet()) return codes;
+        }
+      }
+    }
+    return codes;
+  }
+
+  function handleDecodedCodes(codes, loadId, canvas) {
+    var structured = codes.filter(function (code) { return code.structuredAppend; });
+    if (!structured.length) {
+      resetStructuredCollection();
+      finishDecoded(codes[0], new Uint8Array(codes[0].binaryData), loadId);
+      return;
+    }
+    if (structured.length !== codes.length) {
+      clearScanResult('This image mixes Structured Append and independent QR codes.', true);
+      canvas.hidden = false;
+      $('scan-placeholder').hidden = true;
+      return;
+    }
+
+    var first = structured[0].structuredAppend;
+    for (var i = 1; i < structured.length; i++) {
+      var header = structured[i].structuredAppend;
+      if (header.parity !== first.parity || header.count !== first.count) {
+        clearScanResult('This image contains parts from different QR sets.', true);
+        canvas.hidden = false;
+        $('scan-placeholder').hidden = true;
+        return;
+      }
+    }
+
+    var status;
+    try {
+      for (var part = 0; part < structured.length; part++) {
+        status = structuredCollection.add(
+          structured[part].structuredAppend,
+          new Uint8Array(structured[part].binaryData)
+        );
+      }
+    } catch (err) {
+      clearScanResult(err.message || 'Could not collect these QR parts.', true);
+      canvas.hidden = false;
+      $('scan-placeholder').hidden = true;
+      return;
+    }
+
+    showStructuredProgress(status);
+    if (!status.bytes) {
+      clearScanResult('Add another image containing the missing parts.', false);
+      showStructuredProgress(status);
+      $('scan-status').textContent = structured.length +
+        (structured.length === 1 ? ' QR part found.' : ' QR parts found.');
+      canvas.hidden = false;
+      $('scan-placeholder').hidden = true;
+      return;
+    }
+    finishDecoded({ data: '', chunks: [{ type: 'byte' }] }, status.bytes, loadId);
+  }
+
   function scanImage(file, displayName) {
     if (!file) return;
     var loadId = ++scanLoadId;
@@ -624,49 +1009,22 @@
           return;
         }
 
-        var code;
+        var codes;
         try {
-          code = jsQR(pixels.data, pixels.width, pixels.height, { inversionAttempts: 'attemptBoth' });
+          codes = decodeAllCodes(pixels);
         } catch (err) {
           clearScanResult('Could not decode this image.', true);
           return;
         }
         canvas.hidden = false;
         $('scan-placeholder').hidden = true;
-        if (!code) {
+        if (!codes.length) {
           clearScanResult('No QR code found. Try a sharper, straighter image.', true);
           canvas.hidden = false;
           $('scan-placeholder').hidden = true;
           return;
         }
-
-        var decodedBytes = new Uint8Array(code.binaryData);
-        if (TQR1.isContainer(decodedBytes)) {
-          var unpacking;
-          try {
-            unpacking = TQR1.unpack(decodedBytes);
-          } catch (err) {
-            clearScanResult('This Packed QR code is damaged or unsupported.', true);
-            canvas.hidden = false;
-            $('scan-placeholder').hidden = true;
-            return;
-          }
-          $('scan-status').className = 'meter';
-          $('scan-status').textContent = 'Unpacking locally…';
-          unpacking.then(function (packed) {
-            if (loadId !== scanLoadId) return;
-            showDecodedResult(code, packed, packed.payload);
-          }, function (err) {
-            if (loadId !== scanLoadId) return;
-            clearScanResult(err && err.code === 'unsupported'
-              ? 'This browser cannot unpack compressed QR files.'
-              : 'This Packed QR code is damaged or unsupported.', true);
-            canvas.hidden = false;
-            $('scan-placeholder').hidden = true;
-          });
-          return;
-        }
-        showDecodedResult(code, null, decodedBytes);
+        handleDecodedCodes(codes, loadId, canvas);
       };
       image.src = reader.result;
     };
@@ -674,7 +1032,14 @@
   }
 
   scanDrop.addEventListener('click', function () { scanInput.click(); });
-  scanInput.addEventListener('change', function () { scanImage(scanInput.files[0]); });
+  scanInput.addEventListener('change', function () {
+    scanImage(scanInput.files[0]);
+    scanInput.value = '';
+  });
+  $('clear-parts').addEventListener('click', function () {
+    resetStructuredCollection();
+    clearScanResult('Collected parts cleared.', false);
+  });
   ['dragenter', 'dragover'].forEach(function (ev) {
     scanDrop.addEventListener(ev, function (e) { e.preventDefault(); scanDrop.classList.add('hot'); });
   });
@@ -750,7 +1115,7 @@
 
   $('dl-png').addEventListener('click', function () {
     qrPngBlob(function (blob) {
-      if (blob) download(blob, 'qr.png');
+      if (blob) download(blob, current && current.structured ? 'qr-parts.png' : 'qr.png');
     });
   });
 
@@ -827,6 +1192,11 @@
   // --- wire up live rendering -------------------------------------------
   ['text', 'ssid', 'pass', 'enc', 'hidden-net', 'ec', 'margin'].forEach(function (id) {
     $(id).addEventListener('input', render);
+  });
+
+  $('structured-append').addEventListener('input', function () {
+    updateFileEncodingNote();
+    render();
   });
 
   Array.prototype.forEach.call(document.querySelectorAll('input[name="file-encoding"]'), function (input) {

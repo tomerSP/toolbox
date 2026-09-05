@@ -342,6 +342,7 @@ function scan(matrix) {
                 binaryData: decoded.bytes,
                 data: decoded.text,
                 chunks: decoded.chunks,
+                structuredAppend: decoded.structuredAppend,
                 version: decoded.version,
                 location: {
                     topRightCorner: extracted.mappingFunction(location_1.dimension, 0),
@@ -839,10 +840,10 @@ var ModeByte;
     ModeByte[ModeByte["Terminator"] = 0] = "Terminator";
     ModeByte[ModeByte["Numeric"] = 1] = "Numeric";
     ModeByte[ModeByte["Alphanumeric"] = 2] = "Alphanumeric";
+    ModeByte[ModeByte["StructuredAppend"] = 3] = "StructuredAppend";
     ModeByte[ModeByte["Byte"] = 4] = "Byte";
     ModeByte[ModeByte["Kanji"] = 8] = "Kanji";
     ModeByte[ModeByte["ECI"] = 7] = "ECI";
-    // StructuredAppend = 0x3,
     // FNC1FirstPosition = 0x5,
     // FNC1SecondPosition = 0x9,
 })(ModeByte || (ModeByte = {}));
@@ -957,12 +958,20 @@ function decode(data, version) {
         text: "",
         bytes: [],
         chunks: [],
+        structuredAppend: null,
         version: version,
     };
     while (stream.available() >= 4) {
         var mode = stream.readBits(4);
         if (mode === ModeByte.Terminator) {
             return result;
+        }
+        else if (mode === ModeByte.StructuredAppend) {
+            result.structuredAppend = {
+                index: stream.readBits(4),
+                count: stream.readBits(4) + 1,
+                parity: stream.readBits(8),
+            };
         }
         else if (mode === ModeByte.ECI) {
             if (stream.readBits(1) === 0) {

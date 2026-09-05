@@ -14,8 +14,11 @@ source of truth for current behavior.
 - Packed files preserve metadata and use DEFLATE raw when it reduces total size.
 - Packed encoding falls back to stored bytes when compression is unavailable,
   fails, or makes the container larger.
-- Decodes QR codes from uploaded images as text or downloadable raw bytes.
+- Decodes single QR images or full Structured Append sheets as text or
+  downloadable raw bytes.
 - Copies generated QR images and pastes QR images through the clipboard.
+- Splits oversized payloads into up to 16 standards-compatible Structured
+  Append symbols and reconstructs scanned parts in any order.
 
 ## Product boundary
 
@@ -83,13 +86,14 @@ are unnecessary.
 - [x] Add clipboard copy and paste for QR images.
 - [x] Restore file metadata from Packed codes.
 - [x] Separate Standard, Packed, and Raw file formats visibly in the UI.
-- Consider camera input only after image upload is reliable.
 
 ### F3 — Multiple codes
 
-- Implement QR Structured Append, limited to 16 symbols.
-- Show set identity, part count, and missing parts during decoding.
-- Test interoperability, while guaranteeing reconstruction in this site.
+- [x] Implement QR Structured Append, limited to 16 symbols.
+- [x] Discover all parts in one uploaded sheet; also show parity-based set
+  identity, part count, and missing parts across partial uploads.
+- [x] Emit standard headers and test generated-symbol reconstruction in this site;
+  continue to describe third-party scanner support as variable.
 
 ## Parked
 
@@ -99,11 +103,21 @@ are unnecessary.
 - **Server storage or paid APIs:** outside the site's offline, free-hosting
   constraints.
 - **Custom multi-code framing:** prefer the QR Structured Append standard.
+- **Camera scanning:** image upload, paste, and full-sheet decoding come first.
+  Revisit live camera input later; it adds permissions, continuous-frame state,
+  duplicate suppression, device variation, and a larger testing surface.
+- **Color-density mode:** after F3, prototype three QR symbols layered into the
+  red, green, and blue channels. This could approach 3x capacity while reusing
+  the current encoder and decoder, but would be site-exclusive and substantially
+  less reliable after printing, photography, color correction, or JPEG loss.
+  Keep per-channel framing and checksums; require successful PNG, resized-image,
+  JPEG, and phone-photo trials before committing. Do not pursue module shapes
+  first: they require a custom vision decoder and more pixels per module. JAB
+  Code (ISO/IEC 23634:2022) is the standards-based alternative, but its current
+  reference implementation is not a lightweight browser drop-in.
 
 ## Open questions
 
 - Should Packed mode share this page with Standard mode or become a separate
   subsite for clearer search intent?
 - Is Packed mode useful enough to justify a decoder and private format?
-- Is camera decoding worth its permissions and testing surface after upload
-  decoding ships?

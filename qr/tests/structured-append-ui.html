@@ -1,0 +1,49 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Structured Append UI checks</title>
+<body>Running…<iframe src="../index.html" style="width:1000px;height:800px"></iframe></body>
+<script>
+(function () {
+  'use strict';
+  var frame = document.querySelector('iframe');
+  frame.onload = function () {
+    try {
+      var page = frame.contentDocument;
+      var text = page.getElementById('text');
+      var toggle = page.getElementById('structured-append');
+      toggle.checked = true;
+      text.value = new Array(2401).join('a');
+      text.dispatchEvent(new Event('input'));
+      if (page.querySelectorAll('.qr-part').length !== 2) throw new Error('two-part output');
+      if (page.getElementById('dl-png').textContent !== 'PNG sheet') throw new Error('sheet export');
+
+      text.value = new Array(37266).join('a');
+      text.dispatchEvent(new Event('input'));
+      if (page.getElementById('out').textContent.indexOf('Too much data') < 0) {
+        throw new Error('16-part boundary');
+      }
+
+      text.value = 'short';
+      text.dispatchEvent(new Event('input'));
+      if (page.querySelectorAll('.qr-part').length !== 0) throw new Error('single-code fallback');
+      if (page.getElementById('meter').textContent.indexOf('no split needed') < 0) {
+        throw new Error('single-code explanation');
+      }
+      var structuredLabel = page.getElementById('structured-append').parentNode;
+      if (structuredLabel.offsetWidth >= page.getElementById('generator-settings').offsetWidth) {
+        throw new Error('Structured Append label width');
+      }
+      page.getElementById('tab-wifi').click();
+      var hiddenLabel = page.getElementById('hidden-net').parentNode;
+      if (hiddenLabel.offsetWidth >= page.getElementById('pane-wifi').offsetWidth) {
+        throw new Error('hidden-network label width');
+      }
+      document.body.textContent = 'Structured Append UI checks passed';
+    } catch (err) {
+      document.body.textContent = 'Structured Append UI checks failed: ' + err.message;
+      document.body.style.color = 'red';
+      throw err;
+    }
+  };
+})();
+</script>

@@ -1,0 +1,155 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Structured Append scan UI checks</title>
+<body>Running…<iframe src="../index.html" hidden></iframe></body>
+<script>
+(function () {
+  'use strict';
+  var frame = document.querySelector('iframe');
+
+  function fail(err) {
+    var page = frame.contentDocument;
+    var detail = page && page.getElementById('sa-progress')
+      ? ' | progress: ' + page.getElementById('sa-progress').textContent +
+        ' | status: ' + page.getElementById('scan-status').textContent
+      : '';
+    document.body.textContent = 'Structured Append scan UI checks failed: ' + err.message + detail;
+    document.body.style.color = 'red';
+    throw err;
+  }
+
+  function waitFor(test, callback, attempts, message) {
+    if (test()) {
+      callback();
+    } else if (attempts > 0) {
+      setTimeout(function () { waitFor(test, callback, attempts - 1, message); }, 50);
+    } else {
+      fail(new Error(message || 'timed out'));
+    }
+  }
+
+  frame.onload = function () {
+    var win = frame.contentWindow;
+    var page = frame.contentDocument;
+    var input = new Uint8Array([83, 116, 114, 117, 99, 116, 117, 114, 101, 100, 32, 65, 112, 112, 101, 110, 100]);
+    var parts = win.StructuredAppend.split(input, 9, 16);
+    var parity = win.StructuredAppend.parity(input);
+    var blobs = [];
+
+    function addBytes(qr, bytes) {
+      var original = win.qrcode.stringToBytes;
+      win.qrcode.stringToBytes = function () { return bytes; };
+      try { qr.addData('', 'Byte'); } finally { win.qrcode.stringToBytes = original; }
+    }
+
+    function blobFor(part, callback) {
+      var qr = win.qrcode(0, 'M');
+      qr.addStructuredAppend(part, parts.length, parity);
+      addBytes(qr, parts[part]);
+      qr.make();
+      var margin = 4;
+      var scale = 8;
+      var modules = qr.getModuleCount();
+      var size = (modules + margin * 2) * scale;
+      var canvas = document.createElement('canvas');
+      canvas.width = canvas.height = size;
+      var context = canvas.getContext('2d');
+      context.fillStyle = '#fff';
+      context.fillRect(0, 0, size, size);
+      context.fillStyle = '#000';
+      for (var row = 0; row < modules; row++) {
+        for (var column = 0; column < modules; column++) {
+          if (qr.isDark(row, column)) {
+            context.fillRect((column + margin) * scale, (row + margin) * scale, scale, scale);
+          }
+        }
+      }
+      canvas.toBlob(callback, 'image/png');
+    }
+
+    function scan(blob, name) {
+      var transfer = new DataTransfer();
+      transfer.items.add(new File([blob], name, { type: 'image/png' }));
+      page.getElementById('scan-drop').dispatchEvent(new DragEvent('drop', {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: transfer
+      }));
+    }
+
+    function sheetBlob(callback) {
+      var images = [];
+      var loaded = 0;
+      for (var i = 0; i < blobs.length; i++) {
+        (function (part) {
+          var image = new Image();
+          image.onload = function () {
+            images[part] = image;
+            loaded++;
+            if (loaded !== blobs.length) return;
+            var gap = 40;
+            var canvas = document.createElement('canvas');
+            canvas.width = images[0].width + images[1].width + gap;
+            canvas.height = Math.max(images[0].height, images[1].height);
+            var context = canvas.getContext('2d');
+            context.fillStyle = '#fff';
+            context.fillRect(0, 0, canvas.width, canvas.height);
+            context.drawImage(images[0], 0, 0);
+            context.drawImage(images[1], images[0].width + gap, 0);
+            canvas.toBlob(callback, 'image/png');
+          };
+          image.src = URL.createObjectURL(blobs[part]);
+        })(i);
+      }
+    }
+
+    function ready() {
+      if (blobs.length !== parts.length) return;
+      page.getElementById('tab-scan').click();
+      scan(blobs[1], 'part-2.png');
+      waitFor(function () {
+        return page.getElementById('sa-progress').textContent.indexOf('1 of 2') >= 0;
+      }, function () {
+        try {
+          if (page.getElementById('sa-progress').textContent.indexOf('missing 1') < 0) {
+            throw new Error('missing-part status');
+          }
+          scan(blobs[0], 'part-1.png');
+          waitFor(function () {
+            return page.getElementById('sa-progress').textContent.indexOf('complete') >= 0;
+          }, function () {
+            try {
+              if (page.getElementById('scan-text').value !== 'Structured Append') {
+                throw new Error('reassembled text');
+              }
+              page.getElementById('clear-parts').click();
+              sheetBlob(function (sheet) {
+                scan(sheet, 'full-sheet.png');
+                waitFor(function () {
+                  return page.getElementById('sa-progress').textContent.indexOf('complete') >= 0;
+                }, function () {
+                  try {
+                    if (page.getElementById('scan-text').value !== 'Structured Append') {
+                      throw new Error('whole-sheet reassembly');
+                    }
+                    document.body.textContent = 'Structured Append scan UI checks passed';
+                  } catch (err) { fail(err); }
+                }, 100, 'whole-sheet decode timed out');
+              });
+            } catch (err) { fail(err); }
+          }, 100, 'second individual part timed out');
+        } catch (err) { fail(err); }
+      }, 100, 'first individual part timed out');
+    }
+
+    for (var i = 0; i < parts.length; i++) {
+      (function (part) {
+        blobFor(part, function (blob) {
+          blobs[part] = blob;
+          ready();
+        });
+      })(i);
+    }
+  };
+})();
+</script>

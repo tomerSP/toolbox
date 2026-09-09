@@ -1,4 +1,4 @@
-# Tomer's Toolbox
+# Tomer's Playgroud
 
 Static site: one hub page plus a folder per subsite. No build step, no framework,
 no backend — every tool runs client-side, so hosting is free and permanent.

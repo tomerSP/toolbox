@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Image to ASCII art converter — free, local, text download</title>
+<meta name="description" content="Convert an image to monochrome ASCII art in your browser. Compare the original with real ASCII text and download a clean text file. Nothing is uploaded.">
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  @font-face { font-family: ASCII; src: url('vendor/DejaVuSansMono.ttf') format('truetype'); font-weight: normal; font-style: normal; }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .note, #metadata, #status { font-size: 13px; color: var(--muted); }
+  #status { min-height: 1.6em; }
+  #error { color: var(--warn); }
+  .workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; margin-top: 20px; }
+  .workspace h2 { font-size: 15px; margin: 0 0 12px; }
+  #source { display: block; width: 100%; height: auto; background: white; }
+  .art { background: white; color: black; overflow: auto; }
+  #artwork { font-family: ASCII, monospace; font-weight: normal; font-variant-ligatures: none; line-height: 1.2; margin: 0; white-space: pre; }
+  [hidden] { display: none !important; }
+  @media (max-width: 720px) { .workspace { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="crumb"><a href="../">← Tomer's Toolbox</a></div>
+  <header class="site"><h1>Image to ASCII art converter</h1></header>
+  <p class="lede">Turn your image into monochrome ASCII artwork. Compare, then download reusable text.</p>
+  <section class="panel" aria-label="Choose source image">
+    <label for="file" id="picker-label">Choose an image</label>
+    <input id="file" type="file" accept="image/*" aria-describedby="limits privacy">
+    <p class="note" id="privacy">Processing stays on your device. Nothing is uploaded.</p>
+    <p class="note" id="limits">Browser-supported raster images, up to 20 MB and 16 million pixels. Full image, usually 80 columns; extreme shapes use fewer columns or at most 240 rows. Animated images use a single frame.</p>
+    <p id="status" role="status" aria-live="polite">Choose an image to get started.</p>
+    <p id="error" role="alert" hidden></p>
+    <p id="metadata" hidden></p>
+    <div class="actions"><button id="download" disabled>Download .txt</button></div>
+  </section>
+  <div class="workspace" id="workspace" hidden aria-busy="false">
+    <section class="panel"><h2>Source image</h2><img id="source" alt="Selected source image"></section>
+    <section class="panel"><h2>ASCII artwork</h2><div class="art" id="art-container"><pre id="artwork" aria-label="ASCII artwork"></pre></div></section>
+  </div>
+  <footer class="site">Built by Tomer. Everything here runs client-side.</footer>
+</div>
+<script>
+(function () {
+  'use strict';
+  var fileInput = document.getElementById('file');
+  var status = document.getElementById('status');
+  var error = document.getElementById('error');
+  var metadata = document.getElementById('metadata');
+  var workspace = document.getElementById('workspace');
+  var source = document.getElementById('source');
+  var artwork = document.getElementById('artwork');
+  var download = document.getElementById('download');
+  var generation = 0, sourceURL = null, text = '', filename = '', columns = 80;
+  var fontSize = 32, lineHeight = fontSize * 1.2, cellWidth, characterMap;
+
+  function fitPreview() {
+    if (!cellWidth) { return; }
+    var width = document.getElementById('art-container').clientWidth;
+    artwork.style.fontSize = Math.min(12, width / columns * fontSize / cellWidth) + 'px';
+  }
+
+  function measureCharacters() {
+    var canvas = document.createElement('canvas');
+    var context = canvas.getContext('2d', { willReadFrequently: true });
+    context.font = fontSize + 'px ASCII';
+    cellWidth = context.measureText('M').width;
+    canvas.width = Math.ceil(cellWidth);
+    canvas.height = Math.ceil(lineHeight);
+    context.font = fontSize + 'px ASCII';
+    context.textBaseline = 'middle';
+    var measured = [], code, data, i, density;
+    for (code = 32; code <= 126; code++) {
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.fillText(String.fromCharCode(code), 0, canvas.height / 2);
+      data = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      density = 0;
+      for (i = 3; i < data.length; i += 4) { density += data[i] / 255; }
+      measured.push({ character: String.fromCharCode(code), density: density / (canvas.width * canvas.height) });
+    }
+    measured.sort(function (a, b) { return a.density - b.density; });
+    characterMap = [measured[0]];
+    // Provisional density spacing; benchmark tuning belongs to the next ticket.
+    for (i = 1; i < measured.length; i++) {
+      if (measured[i].density - characterMap[characterMap.length - 1].density >= 0.008) { characterMap.push(measured[i]); }
+    }
+    if (characterMap[characterMap.length - 1] !== measured[measured.length - 1]) { characterMap.push(measured[measured.length - 1]); }
+  }
+
+  function convert(image) {
+    var ratio = image.naturalHeight / image.naturalWidth * cellWidth / lineHeight;
+    columns = Math.max(1, Math.min(80, Math.floor(240 / ratio)));
+    var rows = Math.max(1, Math.min(240, Math.round(columns * ratio)));
+    var canvas = document.createElement('canvas');
+    canvas.width = columns * 8;
+    canvas.height = rows * 8;
+    var context = canvas.getContext('2d', { willReadFrequently: true });
+    context.fillStyle = '#fff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    var pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    var values = [], histogram = [], x, y, dx, dy, index, sum, value;
+    for (index = 0; index < 256; index++) { histogram[index] = 0; }
+    for (y = 0; y < rows; y++) {
+      for (x = 0; x < columns; x++) {
+        sum = 0;
+        for (dy = 0; dy < 8; dy++) {
+          for (dx = 0; dx < 8; dx++) {
+            index = ((y * 8 + dy) * canvas.width + x * 8 + dx) * 4;
+            sum += 0.2126 * pixels[index] + 0.7152 * pixels[index + 1] + 0.0722 * pixels[index + 2];
+          }
+        }
+        value = sum / 64;
+        values.push(value);
+        histogram[Math.round(value)]++;
+      }
+    }
+    function percentile(fraction) {
+      var total = 0, bin;
+      for (bin = 0; bin < 256; bin++) {
+        total += histogram[bin];
+        if (total >= values.length * fraction) { return bin; }
+      }
+      return 255;
+    }
+    var low = percentile(0.02), high = percentile(0.98), lines = [], line, target, best, distance, candidate, j;
+    var maxDensity = characterMap[characterMap.length - 1].density;
+    for (y = 0; y < rows; y++) {
+      line = '';
+      for (x = 0; x < columns; x++) {
+        value = values[y * columns + x];
+        if (high - low >= 16) { value = value * 0.5 + Math.max(0, Math.min(255, (value - low) * 255 / (high - low))) * 0.5; }
+        target = (1 - value / 255) * maxDensity;
+        best = characterMap[0]; distance = Math.abs(target - best.density);
+        for (j = 1; j < characterMap.length; j++) {
+          candidate = Math.abs(target - characterMap[j].density);
+          if (candidate < distance) { best = characterMap[j]; distance = candidate; }
+        }
+        line += best.character;
+      }
+      lines.push(line);
+    }
+    return lines.join('\n');
+  }
+
+  var fontReady = document.fonts ? document.fonts.load(fontSize + 'px ASCII').then(function (fonts) {
+    if (!fonts.length) { throw new Error('font'); }
+    measureCharacters();
+    return true;
+  }, function () { return false; }).catch(function () { return false; }) : null;
+
+  function fail(message, token, url) {
+    if (url) { URL.revokeObjectURL(url); }
+    if (token !== generation) { return; }
+    error.textContent = message;
+    error.hidden = false;
+    status.textContent = 'Choose another image to try again.';
+    workspace.setAttribute('aria-busy', 'false');
+  }
+
+  fileInput.addEventListener('change', function () {
+    var file = fileInput.files[0];
+    fileInput.value = '';
+    if (!file) { return; }
+    var token = ++generation;
+    download.disabled = true; text = '';
+    error.hidden = true; metadata.hidden = true; workspace.hidden = true;
+    if (sourceURL) { URL.revokeObjectURL(sourceURL); sourceURL = null; }
+    source.removeAttribute('src'); artwork.textContent = '';
+    document.getElementById('picker-label').textContent = 'Choose another image';
+    status.textContent = 'Processing image…';
+    workspace.setAttribute('aria-busy', 'true');
+    if (file.size > 20 * 1024 * 1024) { fail('This file exceeds the 20 MB limit.', token); return; }
+    if (/svg/i.test(file.type) || /\.svgz?$/i.test(file.name)) { fail('Choose a raster image, such as PNG, JPEG or WebP. SVG is not supported.', token); return; }
+    if (!fontReady) { fail('This browser cannot load the fixed artwork font. Try a current browser.', token); return; }
+    var url = URL.createObjectURL(file), image = new Image();
+    image.onerror = function () { fail('This image could not be read. Choose a browser-supported raster image.', token, url); };
+    image.onload = function () {
+      if (token !== generation) { URL.revokeObjectURL(url); return; }
+      if (!image.naturalWidth || image.naturalWidth * image.naturalHeight > 16000000) { fail('This image exceeds the 16 million pixel limit. Resize it and try again.', token, url); return; }
+      fontReady.then(function (ready) {
+        if (token !== generation) { URL.revokeObjectURL(url); return; }
+        if (!ready) { fail('The artwork font could not load. Reload and try again.', token, url); return; }
+        // Yield a frame so the processing message can appear before conversion.
+        window.setTimeout(function () {
+          if (token !== generation) { URL.revokeObjectURL(url); return; }
+          try {
+            text = convert(image);
+            filename = file.name.replace(/\.[^.]*$/, '') || 'artwork';
+            sourceURL = url; source.src = url;
+            artwork.textContent = text;
+            metadata.textContent = file.name + ' · ' + image.naturalWidth + ' × ' + image.naturalHeight + ' px · ' + (file.size / 1024).toFixed(1) + ' KB';
+            metadata.hidden = false; workspace.hidden = false;
+            workspace.setAttribute('aria-busy', 'false');
+            status.textContent = 'Ready · ' + columns + ' columns × ' + text.split('\n').length + ' rows';
+            download.disabled = false; fitPreview();
+          } catch (exception) { fail('This image could not be converted. Try a smaller image.', token, url); }
+        }, 30);
+      });
+    };
+    image.src = url;
+  });
+  download.addEventListener('click', function () {
+    if (!text) { return; }
+    var url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+    var link = document.createElement('a');
+    link.href = url; link.download = filename + '.txt';
+    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+    window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  });
+  window.addEventListener('resize', fitPreview);
+}());
+</script>
+</body>
+</html>
